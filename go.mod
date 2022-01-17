@@ -1,0 +1,3 @@
+module github.com/obonobo/ecurl
+
+go 1.17
