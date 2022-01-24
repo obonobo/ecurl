@@ -7,13 +7,13 @@ import (
 )
 
 // Set of supported protocols
-var acceptableProtos = map[string]struct{}{
+var protos = map[string]struct{}{
 	"HTTP/1.1": struct{}{},
 	"HTTP/1.0": struct{}{},
 }
 
 func isAcceptable(proto string) bool {
-	for k := range acceptableProtos {
+	for k := range protos {
 		if proto == k {
 			return true
 		}
@@ -21,9 +21,9 @@ func isAcceptable(proto string) bool {
 	return false
 }
 
-type ErrUnsupportedProto string
+type UnsupportedProtoError string
 
-func (e ErrUnsupportedProto) Error() string {
+func (e UnsupportedProtoError) Error() string {
 	return fmt.Sprintf("protocol '%v' is not supported", string(e))
 }
 
@@ -42,7 +42,7 @@ func ReadStatusLine(reader *bufio.Reader) (StatusLine, error) {
 	if err != nil {
 		return failedToReadStatusLine(err)
 	} else if !isAcceptable(proto) {
-		return StatusLine{}, ErrUnsupportedProto(proto)
+		return StatusLine{}, UnsupportedProtoError(proto)
 	}
 
 	code, err := reader.ReadString(' ')
