@@ -1,9 +1,11 @@
 package ecurl
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"net"
+	"net/textproto"
 	"path"
 	"strconv"
 	"strings"
@@ -25,34 +27,38 @@ func isAcceptableMethod(method string) bool {
 	return method == GET || method == POST
 }
 
-type Request struct {
-	Method  string
-	Host    string
-	Path    string
-	Port    int
-	Headers map[string]string
-	Body    io.Reader
-}
-
-func (r *Request) AddHeader(key, value string) *Request {
-	r.Headers[key] = value
-	return r
-}
-
-func (r *Request) SetHeaders(headers map[string]string) *Request {
-	r.Headers = make(map[string]string, len(headers))
-	for k, v := range headers {
-		r.Headers[k] = v
-	}
-	return r
-}
-
 type Response struct {
 	Status     string
 	StatusCode int
 	Proto      string
 	Headers    map[string]string
 	Body       io.Reader
+}
+
+type Headers map[string]string
+
+func (h Headers) Add(key, value string) {
+	h[textproto.CanonicalMIMEHeaderKey(key)] = value
+}
+
+func (h Headers) Del(key string) {
+	delete(h, textproto.CanonicalMIMEHeaderKey(key))
+}
+
+type Request struct {
+	Method  string
+	Host    string
+	Path    string
+	Port    int
+	Headers Headers
+	Body    io.Reader
+}
+
+func (r *Request) String() string {
+	return fmt.Sprintf(""+
+		"Request[Method=%v, Host=%v, "+
+		"Path=%v, Port=%v, headers=%v, Body=%v]",
+		r.Method, r.Host, r.Path, r.Port, r.Headers, r.Body)
 }
 
 type UnsupportedHttpMethod string
@@ -62,6 +68,7 @@ func (e UnsupportedHttpMethod) Error() string {
 }
 
 func NewRequest(method string, url string, body io.Reader) (*Request, error) {
+	method = strings.ToUpper(method)
 	if !isAcceptableMethod(method) {
 		return nil, UnsupportedHttpMethod(method)
 	}
@@ -71,7 +78,7 @@ func NewRequest(method string, url string, body io.Reader) (*Request, error) {
 		return nil, fmt.Errorf("error parsing url: %w", err)
 	}
 
-	return &Request{
+	r := &Request{
 		Method: method,
 		Port:   port,
 		Path:   path,
@@ -79,11 +86,22 @@ func NewRequest(method string, url string, body io.Reader) (*Request, error) {
 		Body:   body,
 
 		// Request comes with some default headers...
-		Headers: map[string]string{
+		Headers: Headers{
 			"User-Agent": "curl/7.68.0", // Pretending we are curl
 			"Accept":     "*/*",         // By default we will accept anything
+			"Host":       host,          // Computes host header from params
 		},
-	}, nil
+	}
+
+	// If the body is of a type that supports reporting its length, then we can
+	// automatically compute the Content-Length header
+	if x, ok := body.(interface{ Len() int }); ok {
+		r.Headers.Add("Content-Length", fmt.Sprintf("%v", x.Len()))
+	} else if body == nil {
+		r.Headers.Add("Content-Length", "0")
+	}
+
+	return r, nil
 }
 
 func Do(req *Request) (*Response, error) {
@@ -117,7 +135,34 @@ func Do(req *Request) (*Response, error) {
 		}
 	}
 
-	return &Response{}, nil
+	scnr := bufio.NewScanner(conn)
+
+	// Read status line
+	var statusLine string
+	if scnr.Scan() {
+		statusLine = scnr.Text()
+	}
+
+	// Read headers
+	responseHeaders := make(map[string]string, 20)
+	for scnr.Scan() {
+		line := scnr.Text()
+		if line == "" {
+			break
+		}
+		split := strings.Split(line, ":")
+		if len(split) == 0 {
+			break
+		}
+		responseHeaders[split[0]] = strings.Join(split[1:], ":")
+	}
+
+	// Read body
+
+	return &Response{
+		Status:  statusLine,
+		Headers: responseHeaders,
+	}, nil
 }
 
 type InvalidUrlError string
