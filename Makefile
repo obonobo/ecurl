@@ -2,7 +2,8 @@
 default: build
 
 SHELL	=	bash
-out		=	ecurl
+out		=	httpc
+# out		=	ecurl
 
 download:
 	go get -d -v
@@ -10,7 +11,7 @@ download:
 build: download
 	export GOOS=linux
 	export GO111MODULE=on
-	go build -o app
+	go build -o $(out)
 
 # Adds some flags for building the app statically linked (run: `file app` to
 # ensure you are getting a static binary). This is needed for our multi-stage

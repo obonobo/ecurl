@@ -32,10 +32,16 @@ type Response struct {
 	StatusCode int
 	Proto      string
 	Headers    map[string]string
-	Body       io.Reader
+	Body       io.ReadCloser
 }
 
 type Headers map[string]string
+
+func (h Headers) AddAll(headers map[string]string) {
+	for k, v := range headers {
+		h.Add(k, v)
+	}
+}
 
 func (h Headers) Add(key, value string) {
 	h[textproto.CanonicalMIMEHeaderKey(key)] = value
@@ -104,6 +110,25 @@ func NewRequest(method string, url string, body io.Reader) (*Request, error) {
 	return r, nil
 }
 
+// Execute a POST request on the url with the provided content type and body
+func Post(url, contentType string, body io.Reader) (*Response, error) {
+	req, err := NewRequest(POST, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("Post(%v, ...) failed: %w", url, err)
+	}
+	return Do(req)
+}
+
+// Executes a GET request on the url
+func Get(url string) (*Response, error) {
+	req, err := NewRequest(GET, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("Get(%v) failed: %w", url, err)
+	}
+	return Do(req)
+}
+
+// Executes a request through a new TCP connection. Uses HTTP/1.1
 func Do(req *Request) (*Response, error) {
 	conn, err := net.Dial("tcp", fmt.Sprintf("%v:%v", req.Host, req.Port))
 	if err != nil {
@@ -135,12 +160,27 @@ func Do(req *Request) (*Response, error) {
 		}
 	}
 
+	fmt.Fprintln(conn)
+	fmt.Fprintln(conn)
+
 	scnr := bufio.NewScanner(conn)
 
 	// Read status line
-	var statusLine string
+	var status, proto string
+	var statusCode int
 	if scnr.Scan() {
-		statusLine = scnr.Text()
+		line := scnr.Text()
+		split := strings.Split(line, " ")
+		if len(split) > 0 {
+			proto = split[0]
+		}
+		if len(split) > 1 {
+			statusCode, err = strconv.Atoi(split[1])
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse status code: %w", err)
+			}
+			status = strings.Join(split[1:], " ")
+		}
 	}
 
 	// Read headers
@@ -154,15 +194,51 @@ func Do(req *Request) (*Response, error) {
 		if len(split) == 0 {
 			break
 		}
-		responseHeaders[split[0]] = strings.Join(split[1:], ":")
+		responseHeaders[split[0]] = strings.Trim(strings.Join(split[1:], ":"), " ")
 	}
 
-	// Read body
+	// Read Content-Length header
+	var contentLength int
+	if cl, ok := responseHeaders["Content-Length"]; ok {
+		contentLength, err = strconv.Atoi(cl)
+		if err != nil {
+			return nil, fmt.Errorf("'Content-Length' header is not valid: %w", err)
+		}
+	}
 
 	return &Response{
-		Status:  statusLine,
-		Headers: responseHeaders,
+		Proto:      proto,
+		Status:     status,
+		StatusCode: statusCode,
+		Headers:    responseHeaders,
+		Body: &reader{
+			Conn:          conn,
+			contentLength: contentLength,
+		},
 	}, nil
+}
+
+type reader struct {
+	net.Conn
+	contentLength int
+	read          int
+}
+
+// Reads up to r.contentLength, or up until the server closes the connection
+func (r *reader) Read(b []byte) (int, error) {
+	if r.read >= r.contentLength {
+		return 0, fmt.Errorf("Content-Length reached (%v bytes): %w",
+			r.contentLength, io.EOF)
+	}
+
+	n := r.contentLength
+	if len(b) < r.contentLength {
+		n = len(b)
+	}
+
+	red, err := r.Conn.Read(b[:n])
+	r.read += red
+	return red, err
 }
 
 type InvalidUrlError string
