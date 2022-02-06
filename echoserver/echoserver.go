@@ -8,10 +8,103 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// A namespace for some middleware functions
+var middleware = struct {
+	recovery func(*log.Logger) func(http.Handler) http.Handler
+	logging  func(*log.Logger) func(http.Handler) http.Handler
+}{
+	// Catches panicking request handlers and logs the error + stack trace
+	recovery: func(logger *log.Logger) func(h http.Handler) http.Handler {
+		return func(handler http.Handler) http.Handler {
+			return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+				defer func() {
+					err := recover()
+					if err == nil || logger == nil {
+						return
+					}
+					rw.WriteHeader(http.StatusInternalServerError)
+					logger.Printf("EchoServer caught panic: %v\n", err)
+					buf := make([]byte, 1<<20)
+					n := runtime.Stack(buf, true)
+					logger.Printf("%s\n", buf[:n])
+				}()
+				handler.ServeHTTP(rw, r)
+			})
+		}
+	},
+
+	// Logs information about the request and response
+	logging: func(logger *log.Logger) func(handler http.Handler) http.Handler {
+		if logger == nil {
+			return func(handler http.Handler) http.Handler { return handler }
+		}
+
+		return func(handler http.Handler) http.Handler {
+			// Returns only the hostname/ip from an address
+			trimAddress := func(addr string) string {
+				if !strings.Contains(addr, ":") {
+					return addr
+				}
+				return strings.TrimRight(
+					strings.TrimRightFunc(
+						addr, func(r rune) bool { return r != ':' }), ":")
+			}
+
+			const (
+				LEFT = iota - 1
+				MIDDLE
+				RIGHT
+			)
+
+			// Pads the string with spaces so that it is totalWidth long
+			pad := func(s string, width, position int) string {
+				spaces := width - len(s)
+				if spaces < 0 {
+					spaces = 0
+				}
+				switch {
+				case position <= LEFT: // PAD LEFT
+					return s + strings.Repeat(" ", spaces)
+				case position >= RIGHT: // PAD RIGHT
+					return strings.Repeat(" ", spaces) + s
+				case position == MIDDLE: // PAD CENTER
+					roundingError := spaces - (spaces/2)*2
+					return strings.Repeat(" ", roundingError+(spaces/2)) +
+						s + strings.Repeat(" ", spaces/2)
+				default:
+					return s
+				}
+			}
+
+			return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+				recorder := &responseRecorder{rw, 0}
+
+				start := time.Now()
+				handler.ServeHTTP(recorder, r)
+				timeTaken := time.Since(start)
+
+				log.Printf(""+
+					"%v | %v | %v | %v | %v\n",
+					pad("EchoServer", 0, MIDDLE),
+					recorder.status,
+					pad(fmt.Sprintf("%v", timeTaken), 12, RIGHT),
+					pad(fmt.Sprintf(
+						"%v → %v",
+						trimAddress(r.RemoteAddr),
+						trimAddress(r.Host)),
+						29, MIDDLE),
+					fmt.Sprintf("%v %v", strings.ToUpper(r.Method), r.URL),
+				)
+			})
+		}
+	},
+}
 
 // An http.ResponseWriter wrapper that records the status code of the response
 type responseRecorder struct {
@@ -28,12 +121,12 @@ func (r *responseRecorder) WriteHeader(status int) {
 // server as well as some information about the response
 func EchoServerWithAccessLogs(
 	addr string,
-	logsEnabled bool,
+	logger *log.Logger,
 ) (
 	cancel func(),
 	errc <-chan error,
 ) {
-	address := ":8080"
+	address := ":8080" // default port binding
 	if len(addr) > 0 {
 		address = addr
 	}
@@ -52,30 +145,11 @@ func EchoServerWithAccessLogs(
 		}),
 	}
 
-	// If logs are enabled, then add a middleware that provides access logs
-	if logsEnabled {
-		old := srv.Handler
-		trimAddress := func(addr string) string {
-			return strings.TrimRight(
-				strings.TrimRightFunc(
-					addr, func(r rune) bool { return r != ':' }), ":")
-		}
-		srv.Handler = http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-			recorder := &responseRecorder{rw, 0}
-
-			start := time.Now()
-			old.ServeHTTP(recorder, r)
-			timeTaken := time.Since(start)
-
-			log.Printf(""+
-				"EchoServer:\t\t%v\t%v %v %v\t%v\n",
-				trimAddress(r.RemoteAddr),
-				strings.ToUpper(r.Method),
-				r.URL,
-				recorder.status,
-				timeTaken)
-		})
-	}
+	// If logs are enabled, then add a middleware that provides access logs,
+	// also add a recovery middleware to catch panics
+	srv.Handler = middleware.
+		logging(logger)(middleware.
+		recovery(logger)(srv.Handler))
 
 	// Start the server in the background
 	go func() {
@@ -107,7 +181,7 @@ func EchoServer(addr ...string) (cancel func(), errc <-chan error) {
 		address = addr[0]
 	}
 
-	return EchoServerWithAccessLogs(address, false)
+	return EchoServerWithAccessLogs(address, nil)
 }
 
 // An echo server that uses raw TCP sockets. Use ctx and run this function in a

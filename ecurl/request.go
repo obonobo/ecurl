@@ -2,6 +2,7 @@ package ecurl
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -151,17 +152,18 @@ func Do(req *Request) (*Response, error) {
 	for k, v := range req.Headers {
 		fmt.Fprintf(conn, "%v: %v\r\n", k, v)
 	}
+	fmt.Fprint(conn, "\r\n")
 
 	// Write body (if it is present)
 	if req.Body != nil {
 		_, err := io.Copy(conn, req.Body)
 		if err != nil {
+			conn.Close()
 			return nil, fmt.Errorf("error writing request body: %w", err)
 		}
+	} else {
+		// fmt.Fprintln(conn)
 	}
-
-	fmt.Fprintln(conn)
-	fmt.Fprintln(conn)
 
 	scnr := bufio.NewScanner(conn)
 
@@ -177,6 +179,7 @@ func Do(req *Request) (*Response, error) {
 		if len(split) > 1 {
 			statusCode, err = strconv.Atoi(split[1])
 			if err != nil {
+				conn.Close()
 				return nil, fmt.Errorf("failed to parse status code: %w", err)
 			}
 			status = strings.Join(split[1:], " ")
@@ -202,11 +205,12 @@ func Do(req *Request) (*Response, error) {
 	if cl, ok := responseHeaders["Content-Length"]; ok {
 		contentLength, err = strconv.Atoi(cl)
 		if err != nil {
+			conn.Close()
 			return nil, fmt.Errorf("'Content-Length' header is not valid: %w", err)
 		}
 	}
 
-	return &Response{
+	response := &Response{
 		Proto:      proto,
 		Status:     status,
 		StatusCode: statusCode,
@@ -215,7 +219,14 @@ func Do(req *Request) (*Response, error) {
 			Conn:          conn,
 			contentLength: contentLength,
 		},
-	}, nil
+	}
+
+	if contentLength == 0 {
+		conn.Close()
+		response.Body = io.NopCloser(bytes.NewBufferString(""))
+	}
+
+	return response, nil
 }
 
 type reader struct {

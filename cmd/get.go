@@ -95,10 +95,16 @@ func Get(params GetParams) (exit int) {
 	}
 	defer r.Body.Close()
 
-	_, err = io.Copy(os.Stdout, r.Body)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+	if params.Verbose {
+
+	}
+
+	if r.Body != nil {
+		_, err = io.Copy(os.Stdout, r.Body)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 	}
 
 	return 0
