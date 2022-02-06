@@ -106,6 +106,20 @@ var middleware = struct {
 	},
 }
 
+// Spins up a server that responds to requests by echoing back the request.
+//
+// addr parameter is optional, the first addr specified will be used if provided
+//
+// Use cancel() to shutdown the server gracefully, read from errc to get the
+// result of srv.ListenAndServe
+func EchoServer(addr ...string) (cancel func(), errc <-chan error) {
+	address := ""
+	if len(addr) > 0 {
+		address = addr[0]
+	}
+	return EchoServerWithAccessLogs(address, nil)
+}
+
 // An http.ResponseWriter wrapper that records the status code of the response
 type responseRecorder struct {
 	http.ResponseWriter
@@ -140,8 +154,9 @@ func EchoServerWithAccessLogs(
 			rw.Write([]byte(fmt.Sprintf("%v %v %v\r\n", r.Method, r.URL.Path, r.Proto)))
 			rw.Write([]byte(fmt.Sprintf("Host: %v\r\n", r.Host)))
 			r.Header.Write(rw)
-			rw.Write([]byte("\r\n"))
-			io.Copy(rw, r.Body)
+			if _, err := io.Copy(rw, r.Body); err != nil {
+				panic(err)
+			}
 		}),
 	}
 
@@ -167,21 +182,6 @@ func EchoServerWithAccessLogs(
 
 	<-readyc
 	return cancel, errcc
-}
-
-// Spins up a server that responds to requests by echoing back the request.
-//
-// addr parameter is optional, the first addr specified will be used if provided
-//
-// Use cancel() to shutdown the server gracefully, read from errc to get the
-// result of srv.ListenAndServe
-func EchoServer(addr ...string) (cancel func(), errc <-chan error) {
-	address := ""
-	if len(addr) > 0 {
-		address = addr[0]
-	}
-
-	return EchoServerWithAccessLogs(address, nil)
 }
 
 // An echo server that uses raw TCP sockets. Use ctx and run this function in a

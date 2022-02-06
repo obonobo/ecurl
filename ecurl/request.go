@@ -1,7 +1,6 @@
 package ecurl
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -11,6 +10,27 @@ import (
 	"strconv"
 	"strings"
 )
+
+// Set of supported protocols
+var protos = map[string]struct{}{
+	"HTTP/1.1": {},
+	"HTTP/1.0": {},
+}
+
+func isAcceptable(proto string) bool {
+	for k := range protos {
+		if proto == k {
+			return true
+		}
+	}
+	return false
+}
+
+type UnsupportedProtoError string
+
+func (e UnsupportedProtoError) Error() string {
+	return fmt.Sprintf("protocol '%v' is not supported", string(e))
+}
 
 const (
 	HTTP  = "http"  // Acceptable protocol #1
@@ -32,7 +52,7 @@ type Response struct {
 	Status     string
 	StatusCode int
 	Proto      string
-	Headers    map[string]string
+	Headers    Headers
 	Body       io.ReadCloser
 }
 
@@ -50,6 +70,22 @@ func (h Headers) Add(key, value string) {
 
 func (h Headers) Del(key string) {
 	delete(h, textproto.CanonicalMIMEHeaderKey(key))
+}
+
+func (h Headers) Write(w io.Writer) error {
+	for k, v := range h {
+		if _, err := w.Write([]byte(fmt.Sprintf("%v: %v\r\n", k, v))); err != nil {
+			return fmt.Errorf("Headers.Write: %w", err)
+		}
+	}
+	return nil
+}
+
+func (h Headers) Printout() (out string) {
+	for k, v := range h {
+		out += fmt.Sprintf("%v: %v\n", k, v)
+	}
+	return out
 }
 
 type Request struct {
@@ -137,119 +173,310 @@ func Do(req *Request) (*Response, error) {
 	}
 
 	// Write request line
-	_, err = fmt.Fprintf(
-		conn,
+	if err := writeRequestLine(conn, req); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	// Write headers
+	if err := writeHeaders(conn, req); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	// Write body (if it is present)
+	if err := writeBody(conn, req); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	// Return response
+	resp, err := readResponse(conn)
+	if err != nil {
+		conn.Close()
+	}
+	return resp, err
+}
+
+func readResponse(conn net.Conn) (*Response, error) {
+	response := &Response{Body: io.NopCloser(bytes.NewBufferString(""))}
+
+	// 1 MB buffer for reading response
+	buf := buffer{make([]byte, 1<<20), 0}
+
+	// Read status line
+	if err := buf.readStatusLine(response, conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	// Read response headers
+	if err := buf.readHeaders(response, conn); err != nil {
+		conn.Close()
+		return response, err
+	}
+
+	// Read Content-Length header
+	cl, err := contentLength(response)
+	if err != nil {
+		return response, err
+	}
+	if cl == 0 {
+		conn.Close()
+		return response, nil
+	}
+
+	response.Body = &reader{conn: conn, buf: &buf, clen: cl}
+	return response, nil
+}
+
+func contentLength(response *Response) (int, error) {
+	cl, ok := response.Headers["Content-Length"]
+	if !ok {
+		return 0, fmt.Errorf("'Content-Length' header is not present in response")
+	}
+	contentLength, err := strconv.Atoi(cl)
+	if err != nil {
+		return 0, fmt.Errorf("'Content-Length' header is not valid: %w", err)
+	}
+	return contentLength, nil
+}
+
+type buffer struct {
+	b   []byte
+	red int
+}
+
+// Reads the status line from the io.Reader r, storing it in the response. Note
+// that this is the first read into the buffer so there is no read loop, if the
+// buffer is not big enough to read the status line, we return an error
+func (buf *buffer) readStatusLine(response *Response, r io.Reader) error {
+	// Chug
+	nn, err := r.Read(buf.b)
+	if err != nil && nn == 0 {
+		return fmt.Errorf("failed to read response from socket: %w", err)
+	}
+	buf.b = buf.b[:nn]
+
+	// Read status line
+	line, n, err := scanLine(buf.b)
+	buf.red += n
+	if err != nil {
+		return fmt.Errorf("error scanning response line: %w", err)
+	}
+	split := strings.Split(line, " ")
+
+	// Status line should split in 3
+	if len(split) < 2 {
+		return fmt.Errorf("malformed status line: '%v'", line)
+	}
+
+	response.Proto = split[0]
+	response.StatusCode, err = strconv.Atoi(split[1])
+	if err != nil {
+		return fmt.Errorf("failed to parse status code from status line: %v", err)
+	}
+	response.Status = strings.Join(split[1:], " ")
+	return nil
+}
+
+// Reads the response headers from the buffer, storing them in the reponse, if
+// necessary this method will load more data from the conn into the buffer to
+// continue reading headers
+func (buf *buffer) readHeaders(response *Response, conn io.Reader) error {
+	response.Headers = make(map[string]string, 20)
+	for exit := false; !exit; {
+		if exit && buf.red == len(buf.b)-1 {
+			return fmt.Errorf("" +
+				"malformed response, " +
+				"headers have not been properly ended with '\r\n'")
+		}
+
+		line, n, err := scanLine(buf.b[buf.red:])
+		if err != nil {
+			if exit {
+				// Then we have read all that we can read and the remainder of
+				// the buffer is malformed, mark the remainder as read and
+				// return an error
+				buf.red = len(buf.b) - 1
+				continue
+			}
+			if buf.red == 0 {
+				// Our buffer is not big enough to handle the next line
+				// (unlikely), return an error
+				return fmt.Errorf("buffer is not big enough: %w", err)
+			}
+
+			// Then we need to read more, discard the read portion of the buffer
+			// and read from the socket again
+			copy(buf.b, buf.b[buf.red:])
+			unread := len(buf.b) - buf.red
+			buf.red = 0
+			nn, err := conn.Read(buf.b[unread:])
+			buf.b = buf.b[:unread+nn]
+			if err != nil {
+				exit = true
+				// conn.Close()
+			}
+			continue
+		}
+		buf.red += n
+
+		if line == "" {
+			// Done reading headers
+			break
+		}
+
+		split := strings.Split(line, ":")
+		if len(split) < 2 {
+			// Then we have a malformed header (e.g.: Content-Length\r\n) We
+			// will handle it by just assuming that they meant to place a colon
+			// and left an empty value (not sure if that is RFC legal)
+			key := textproto.CanonicalMIMEHeaderKey(line)
+			response.Headers[key] = ""
+			continue
+		}
+		key := textproto.CanonicalMIMEHeaderKey(split[0])
+		response.Headers[key] = strings.Trim(strings.Join(split[1:], ":"), " ")
+	}
+	return nil
+}
+
+func writeRequestLine(w io.Writer, req *Request) error {
+	_, err := fmt.Fprintf(w,
 		"%v %v %v\r\n",
 		strings.ToUpper(req.Method),
 		req.Path,
 		"HTTP/1.1")
-
 	if err != nil {
-		return nil, fmt.Errorf("error writing http request line: %w", err)
+		return fmt.Errorf("error writing http request line: %w", err)
 	}
-
-	// Write headers
-	for k, v := range req.Headers {
-		fmt.Fprintf(conn, "%v: %v\r\n", k, v)
-	}
-	fmt.Fprint(conn, "\r\n")
-
-	// Write body (if it is present)
-	if req.Body != nil {
-		_, err := io.Copy(conn, req.Body)
-		if err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("error writing request body: %w", err)
-		}
-	} else {
-		// fmt.Fprintln(conn)
-	}
-
-	scnr := bufio.NewScanner(conn)
-
-	// Read status line
-	var status, proto string
-	var statusCode int
-	if scnr.Scan() {
-		line := scnr.Text()
-		split := strings.Split(line, " ")
-		if len(split) > 0 {
-			proto = split[0]
-		}
-		if len(split) > 1 {
-			statusCode, err = strconv.Atoi(split[1])
-			if err != nil {
-				conn.Close()
-				return nil, fmt.Errorf("failed to parse status code: %w", err)
-			}
-			status = strings.Join(split[1:], " ")
-		}
-	}
-
-	// Read headers
-	responseHeaders := make(map[string]string, 20)
-	for scnr.Scan() {
-		line := scnr.Text()
-		if line == "" {
-			break
-		}
-		split := strings.Split(line, ":")
-		if len(split) == 0 {
-			break
-		}
-		responseHeaders[split[0]] = strings.Trim(strings.Join(split[1:], ":"), " ")
-	}
-
-	// Read Content-Length header
-	var contentLength int
-	if cl, ok := responseHeaders["Content-Length"]; ok {
-		contentLength, err = strconv.Atoi(cl)
-		if err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("'Content-Length' header is not valid: %w", err)
-		}
-	}
-
-	response := &Response{
-		Proto:      proto,
-		Status:     status,
-		StatusCode: statusCode,
-		Headers:    responseHeaders,
-		Body: &reader{
-			Conn:          conn,
-			contentLength: contentLength,
-		},
-	}
-
-	if contentLength == 0 {
-		conn.Close()
-		response.Body = io.NopCloser(bytes.NewBufferString(""))
-	}
-
-	return response, nil
+	return nil
 }
 
+func writeHeaders(w io.Writer, req *Request) error {
+	var out string
+	for k, v := range req.Headers {
+		out += fmt.Sprintf("%v: %v\r\n", k, v)
+	}
+	out += "\r\n"
+	_, err := w.Write([]byte(out))
+	if err != nil {
+		return fmt.Errorf("error writing http request headers: %w", err)
+	}
+	return nil
+}
+
+func writeBody(w io.Writer, req *Request) error {
+	if req.Body != nil {
+		_, err := io.Copy(w, req.Body)
+		if err != nil {
+			return fmt.Errorf("error writing request body: %w", err)
+		}
+	}
+	return nil
+}
+
+// A Content-Length limited io.ReadCloser that wraps the raw TCP connection. The
+// reader will use buf as a buffer while reading - it will read from the socket
+// in chunks of length len(buf.b), and will return io.EOF once it has read up to
 type reader struct {
-	net.Conn
-	contentLength int
-	read          int
+	conn net.Conn // TCP connection
+	buf  *buffer  // Buffer for reading - it will be around 1MB
+	clen int      // Content-Length
+	read int      // Amount read
+	err  error    // Recorded error
+}
+
+var ErrResponseBodyClosed = fmt.Errorf("reader already closed")
+
+func (r *reader) Close() error {
+	// Free the buffer
+	r.buf = nil
+
+	// Register a closed error
+	r.err = ErrResponseBodyClosed
+
+	// Close the TCP socket
+	return r.conn.Close()
 }
 
 // Reads up to r.contentLength, or up until the server closes the connection
 func (r *reader) Read(b []byte) (int, error) {
-	if r.read >= r.contentLength {
-		return 0, fmt.Errorf("Content-Length reached (%v bytes): %w",
-			r.contentLength, io.EOF)
+	if r.err != nil {
+		return 0, r.err
 	}
 
-	n := r.contentLength
-	if len(b) < r.contentLength {
-		n = len(b)
+	left := r.clen - r.read
+	if left <= 0 {
+		r.err = io.EOF
+		return 0, r.err
 	}
 
-	red, err := r.Conn.Read(b[:n])
-	r.read += red
-	return red, err
+	to := left
+	if remainderBuf := len(r.buf.b) - r.buf.red; to > remainderBuf {
+		to = remainderBuf
+	}
+
+	// Read as much as possible
+	var read int
+	slice := r.buf.b[r.buf.red : r.buf.red+to]
+	n := copy(b, slice)
+	r.buf.red += n
+	r.read += n
+	read += n
+
+	if n == len(b) {
+		// Then we've satisfied the whole read request
+		return read, nil
+	}
+
+	// Also check for EOF from Content-Length
+	left = r.clen - r.read
+	if left <= 0 {
+		r.err = io.EOF
+		return read, r.err
+	}
+
+	// Otherwise, we will have to read more data from the socket
+	for {
+		if r.err != nil {
+			return read, r.err
+		}
+
+		left = r.clen - r.read
+		if left <= 0 {
+			return read, io.EOF
+		}
+
+		to = left
+		if remainderBuf := len(r.buf.b) - r.buf.red; to > remainderBuf {
+			to = remainderBuf
+			if remainderBuf == 0 {
+				// Then reset the buffer
+				r.buf.red = 0
+				r.buf.b = r.buf.b[:cap(r.buf.b)]
+				to = len(r.buf.b)
+			}
+		}
+
+		n, err := r.conn.Read(r.buf.b[r.buf.red : r.buf.red+to])
+		r.buf.b = r.buf.b[r.buf.red:n]
+		if err != nil {
+			// Record the error, but still read the contents of the buffer
+			r.err = fmt.Errorf("tcp read: %w", err)
+		}
+
+		n = copy(b[read:], r.buf.b[r.buf.red:])
+		r.buf.red += n
+		r.read += n
+		read += n
+
+		if read == len(b) {
+			// We've read as much as we can
+			return read, nil
+		}
+	}
 }
 
 type InvalidUrlError string
@@ -258,23 +485,24 @@ func (e InvalidUrlError) Error() string {
 	return fmt.Sprintf("invalid url '%v'", string(e))
 }
 
-func splitUrl(url string) (proto, host, pth string, port int, err error) {
-	splt := strings.Split(url, "/")
-	if len(splt) < 3 || splt[1] != "" || splt[0][len(splt)] != ':' {
-		return "", "", "", 0, InvalidUrlError(url)
+func splitUrl(u string) (proto, host, pth string, port int, err error) {
+
+	split := strings.Split(u, "/")
+	if len(split) < 3 || split[1] != "" || split[0][len(split[0])-1] != ':' {
+		return "", "", "", 0, InvalidUrlError(u)
 	}
 
 	// PROTOCOL
-	proto = splt[0][:len(splt)]
+	proto = strings.TrimRight(split[0], ":")
 	if !isAcceptableProto(proto) {
 		return "", "", "", 0,
 			fmt.Errorf(
 				"cannot split request url ('%v'): %w",
-				url, UnsupportedProtoError(proto))
+				u, UnsupportedProtoError(proto))
 	}
 
 	// HOST
-	spltt := strings.Split(splt[2], ":")
+	spltt := strings.Split(split[2], ":")
 	switch len(spltt) {
 	case 2:
 		host = spltt[0]
@@ -296,7 +524,24 @@ func splitUrl(url string) (proto, host, pth string, port int, err error) {
 	}
 
 	// PATH
-	pth = "/" + path.Join(splt[3:]...)
-
+	pth = "/" + path.Join(split[3:]...)
 	return proto, host, pth, port, nil
+}
+
+var errLineTooLong = fmt.Errorf("line is too long")
+
+// Reads a line from the buffer, returns the line read with \r\n trimmed, the
+// number of bytes read from the buffer, and an error if the line is too long
+func scanLine(buf []byte) (string, int, error) {
+	for i := 0; i < len(buf); i++ {
+		if buf[i] == '\n' {
+			// We have reached a line
+			return strings.TrimRight(string(buf[:i]), "\r\n"), i + 1, nil
+		}
+	}
+
+	// Otherwise, the line is too long
+	return strings.TrimRight(string(buf), "\r\n"),
+		len(buf),
+		fmt.Errorf("read %v bytes without a newline: %w", len(buf), errLineTooLong)
 }

@@ -86,7 +86,6 @@ func Get(params GetParams) (exit int) {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-
 	req.Headers.AddAll(params.Headers)
 	r, err := ecurl.Do(req)
 	if err != nil {
@@ -94,18 +93,17 @@ func Get(params GetParams) (exit int) {
 		return 1
 	}
 	defer r.Body.Close()
+	return printResponse(r, params.Verbose)
+}
 
-	if params.Verbose {
-
+func printResponse(r *ecurl.Response, verbose bool) (exit int) {
+	if verbose {
+		fmt.Printf("%v %v\n", r.Proto, r.Status)
+		fmt.Println(r.Headers.Printout())
 	}
-
-	if r.Body != nil {
-		_, err = io.Copy(os.Stdout, r.Body)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
+	if _, err := io.Copy(os.Stdout, r.Body); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
 	}
-
-	return 0
+	return exit
 }
