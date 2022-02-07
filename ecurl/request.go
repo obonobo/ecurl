@@ -270,7 +270,7 @@ func (buf *buffer) readStatusLine(response *Response, r io.Reader) error {
 // continue reading headers
 func (buf *buffer) readHeaders(response *Response, conn io.Reader) error {
 	response.Headers = make(map[string]string, 20)
-	for exit := false; !exit; {
+	for exit := false; ; {
 		if exit && buf.red == len(buf.b)-1 {
 			return fmt.Errorf("" +
 				"malformed response, " +
@@ -301,7 +301,6 @@ func (buf *buffer) readHeaders(response *Response, conn io.Reader) error {
 			buf.b = buf.b[:unread+nn]
 			if err != nil {
 				exit = true
-				// conn.Close()
 			}
 			continue
 		}
@@ -319,10 +318,10 @@ func (buf *buffer) readHeaders(response *Response, conn io.Reader) error {
 			// and left an empty value (not sure if that is RFC legal)
 			key := textproto.CanonicalMIMEHeaderKey(line)
 			response.Headers[key] = ""
-			continue
+		} else {
+			key := textproto.CanonicalMIMEHeaderKey(split[0])
+			response.Headers[key] = strings.Trim(strings.Join(split[1:], ":"), " ")
 		}
-		key := textproto.CanonicalMIMEHeaderKey(split[0])
-		response.Headers[key] = strings.Trim(strings.Join(split[1:], ":"), " ")
 	}
 	return nil
 }
@@ -353,11 +352,12 @@ func writeHeaders(w io.Writer, req *Request) error {
 }
 
 func writeBody(w io.Writer, req *Request) error {
-	if req.Body != nil {
-		_, err := io.Copy(w, req.Body)
-		if err != nil {
-			return fmt.Errorf("error writing request body: %w", err)
-		}
+	if req.Body == nil {
+		return nil
+	}
+	_, err := io.Copy(w, req.Body)
+	if err != nil {
+		return fmt.Errorf("error writing request body: %w", err)
 	}
 	return nil
 }

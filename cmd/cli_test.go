@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,7 +19,8 @@ const (
 	tool = "ecurl"
 )
 
-// Special trim function, should only be used in these tests
+// Special trim function, should only be used in these tests (because it also
+// removes tab + carriage returns from the string)
 var trim = func(s string) string {
 	return strings.
 		ReplaceAll(strings.
@@ -28,7 +30,57 @@ var trim = func(s string) string {
 			"\r", "")
 }
 
-func TestGetAndPostEchoServer(t *testing.T) {
+// Tests POST requests with data read from file
+func TestPostDataFromFile(t *testing.T) {
+	close := mustBackgroundServer(t)
+	defer close()
+
+	// Function for creating the CLI args
+	cmd := func(file string, verbose bool) []string {
+		ret := make([]string, 0, 5)
+		ret = append(ret, []string{tool, POST}...)
+		if verbose {
+			ret = append(ret, "--verbose")
+		}
+		ret = append(ret, []string{"--file", file}...)
+		ret = append(ret, url)
+		return ret
+	}
+
+	for _, tc := range []struct {
+		name    string
+		data    string
+		verbose bool
+		exit    int
+		output  string
+	}{
+		{
+			name:    "Hello World",
+			verbose: false,
+			exit:    0,
+			data:    "Hello World",
+			output: `
+			POST / HTTP/1.1
+			Host: localhost
+			Accept: */*
+			Content-Length: 11
+			User-Agent: curl/7.68.0
+
+			Hello World
+			`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp, delete := mustCreateTempFile(t, "tmp-TestPostDataFromFile-*.txt", tc.data)
+			defer delete()
+			args := cmd(tmp.Name(), tc.verbose)
+			assertCliOutput(t, args, tc.exit, tc.output)
+		})
+	}
+}
+
+// Tests some simple GET and POST requests against the EchoServer
+func TestGetAndPostSuccess(t *testing.T) {
 	close := mustBackgroundServer(t)
 	defer close()
 
@@ -233,4 +285,31 @@ func mockStdoutStderr(t *testing.T) (output func() string) {
 		t.Fatalf("Failed to record stdout/stderr: %v", err)
 	}
 	return output
+}
+
+// Creates a temporary file with the provided data, if this operation fails,
+// your test will be FailNow-ed with an error. Returns a function that can be
+// used for deleting the file
+func mustCreateTempFile(
+	t *testing.T,
+	namePattern, contents string,
+) (file *os.File, delete func()) {
+	fh, err := os.CreateTemp(".", namePattern)
+	if err != nil {
+		t.Fatalf("Got an error when trying to create "+
+			"file (pattern '%v'): %v", namePattern, err)
+	}
+	delete = func() {
+		fh.Close()
+		os.Remove(fh.Name())
+	}
+	if _, err := fh.Write([]byte(contents)); err != nil {
+		delete()
+		t.Fatalf("Failed to write data to file '%v'", fh.Name())
+	}
+	if _, err := fh.Seek(0, 0); err != nil {
+		delete()
+		t.Fatalf("Failed to seek to beginning of file '%v'", fh.Name())
+	}
+	return fh, delete
 }
