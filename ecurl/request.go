@@ -11,21 +11,6 @@ import (
 	"strings"
 )
 
-// Set of supported protocols
-var protos = map[string]struct{}{
-	"HTTP/1.1": {},
-	"HTTP/1.0": {},
-}
-
-func isAcceptable(proto string) bool {
-	for k := range protos {
-		if proto == k {
-			return true
-		}
-	}
-	return false
-}
-
 type UnsupportedProtoError string
 
 func (e UnsupportedProtoError) Error() string {
@@ -401,7 +386,8 @@ func (r *reader) Close() error {
 	return r.conn.Close()
 }
 
-// Reads up to r.contentLength, or up until the server closes the connection
+// Reads up to r.contentLength, or up until the server closes the connection.
+// Reads are buffered by the reader's internal buffer
 func (r *reader) Read(b []byte) (int, error) {
 	if r.err != nil {
 		return 0, r.err

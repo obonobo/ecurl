@@ -1,10 +1,14 @@
 package cmd
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+
+	"github.com/obonobo/ecurl/ecurl"
 )
 
 const POST = "post"
@@ -95,6 +99,60 @@ func checkPostParams(params PostParams) (exit int, msg string) {
 }
 
 func Post(params PostParams) (exit int) {
-	fmt.Println(params)
-	return 1
+	body, size, err := bodyReader(params)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer body.Close()
+	return makeRequest(params.GetParams, ecurl.POST, body, size)
+}
+
+type FailedToReadFileError struct {
+	Name string
+	Err  error
+}
+
+func (e *FailedToReadFileError) Error() string {
+	ret := fmt.Sprintf("failed to read file '%v'", e.Name)
+	if e.Err != nil {
+		ret += fmt.Sprintf(": %v", e.Err)
+	}
+	return ret
+}
+
+func (e *FailedToReadFileError) Unwrap() error {
+	return e.Err
+}
+
+// Obtains a body reader from the provided params, if the params specify
+// inline-data, then the body reader is a io.NopCloser on the data, if the
+// params specify a file then the body reader is a file handle.
+//
+// Return values are: the body reader, the size of the data in the reader, and
+// an error if we are reading a file and the file fails to open or we cannot
+// determine its size
+func bodyReader(params PostParams) (io.ReadCloser, int, error) {
+	if params.InlineData != "" || params.File == "" {
+		data := bytes.NewBufferString(params.InlineData)
+		return io.NopCloser(data), data.Len(), nil
+	}
+	fh, err := os.Open(params.File)
+	if err != nil {
+		return nil, 0, &FailedToReadFileError{params.File, err}
+	}
+	size, err := fileSize(fh)
+	if err != nil {
+		fh.Close()
+		return nil, 0, err
+	}
+	return fh, size, nil
+}
+
+func fileSize(fh *os.File) (int, error) {
+	stat, err := fh.Stat()
+	if err != nil {
+		return -1, fmt.Errorf("error trying to determine file size: %w", err)
+	}
+	return int(stat.Size()), nil
 }

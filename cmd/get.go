@@ -81,12 +81,20 @@ func getCmd(config *Config) (usage func(), action func(args []string) int) {
 }
 
 func Get(params GetParams) (exit int) {
-	req, err := ecurl.NewRequest(ecurl.GET, params.Url, nil)
+	return makeRequest(params, ecurl.GET, nil, 0)
+}
+
+func makeRequest(params GetParams, method string, body io.Reader, length int) (exit int) {
+	req, err := ecurl.NewRequest(method, params.Url, body)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+
+	// Add headers
 	req.Headers.AddAll(params.Headers)
+	req.Headers.Add("Content-Length", fmt.Sprintf("%v", length))
+
 	r, err := ecurl.Do(req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

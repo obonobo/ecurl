@@ -154,6 +154,12 @@ func EchoServerWithAccessLogs(
 			rw.Write([]byte(fmt.Sprintf("%v %v %v\r\n", r.Method, r.URL.Path, r.Proto)))
 			rw.Write([]byte(fmt.Sprintf("Host: %v\r\n", r.Host)))
 			r.Header.Write(rw)
+
+			// Add blank line if we are printing a body
+			if r.ContentLength > 0 {
+				rw.Write([]byte("\r\n"))
+			}
+
 			if _, err := io.Copy(rw, r.Body); err != nil {
 				panic(err)
 			}

@@ -70,66 +70,70 @@ func TestGetAndPostEchoServer(t *testing.T) {
 		},
 
 		// POST, no body data
-		// {
-		// 	name: fmt.Sprintf("no body %v %v", POST, url),
-		// 	args: []string{tool, POST, url},
-		// 	exit: 0,
-		// 	output: `
-		// 	POST / HTTP/1.1
-		// 	Host: localhost
-		// 	Accept: */*
-		// 	Content-Length: 0
-		// 	User-Agent: curl/7.68.0
-		// 	`,
-		// },
-		// {
-		// 	name: fmt.Sprintf("no body %v --verbose %v", POST, url),
-		// 	args: []string{tool, POST, "--verbose", url},
-		// 	exit: 0,
-		// 	output: `
-		// 	HTTP/1.1 200 OK
-		// 	Content-Length: 90
-		// 	Content-Type: text/plain; charset=utf-8
-		// 	Date: Mon, 07 Feb 2022 18:11:54 GMT
+		{
+			name: fmt.Sprintf("no body %v %v", POST, url),
+			args: []string{tool, POST, url},
+			exit: 0,
+			output: `
+			POST / HTTP/1.1
+			Host: localhost
+			Accept: */*
+			Content-Length: 0
+			User-Agent: curl/7.68.0
+			`,
+		},
+		{
+			name: fmt.Sprintf("no body %v --verbose %v", POST, url),
+			args: []string{tool, POST, "--verbose", url},
+			exit: 0,
+			output: `
+			HTTP/1.1 200 OK
+			Content-Length: 91
+			Content-Type: text/plain; charset=utf-8
+			Date: Mon, 07 Feb 2022 18:11:54 GMT
 
-		// 	POST / HTTP/1.1
-		// 	Host: localhost
-		// 	Accept: */*
-		// 	Content-Length: 0
-		// 	User-Agent: curl/7.68.0
-		// 	`,
-		// },
+			POST / HTTP/1.1
+			Host: localhost
+			Accept: */*
+			Content-Length: 0
+			User-Agent: curl/7.68.0
+			`,
+		},
 
-		// // POST, with body data
-		// {
-		// 	name: fmt.Sprintf("no body %v %v", POST, url),
-		// 	args: []string{tool, POST, url},
-		// 	exit: 0,
-		// 	output: `
-		// 	POST / HTTP/1.1
-		// 	Host: localhost
-		// 	Accept: */*
-		// 	Content-Length: 0
-		// 	User-Agent: curl/7.68.0
-		// 	`,
-		// },
-		// {
-		// 	name: fmt.Sprintf("no body %v --verbose %v", POST, url),
-		// 	args: []string{tool, POST, "--verbose", url},
-		// 	exit: 0,
-		// 	output: `
-		// 	HTTP/1.1 200 OK
-		// 	Content-Length: 90
-		// 	Content-Type: text/plain; charset=utf-8
-		// 	Date: Mon, 07 Feb 2022 18:11:54 GMT
+		// POST, with inline body data
+		{
+			name: fmt.Sprintf("no body %v --data 'Hello\\n' %v", POST, url),
+			args: []string{tool, POST, "--data", "Hello\n", url},
+			exit: 0,
+			output: `
+			POST / HTTP/1.1
+			Host: localhost
+			Accept: */*
+			Content-Length: 6
+			User-Agent: curl/7.68.0
 
-		// 	POST / HTTP/1.1
-		// 	Host: localhost
-		// 	Accept: */*
-		// 	Content-Length: 0
-		// 	User-Agent: curl/7.68.0
-		// 	`,
-		// },
+			Hello
+			`,
+		},
+		{
+			name: fmt.Sprintf("no body %v --data 'Hello\\n' --verbose %v", POST, url),
+			args: []string{tool, POST, "--data", "Hello\n", "--verbose", url},
+			exit: 0,
+			output: `
+			HTTP/1.1 200 OK
+			Content-Length: 99
+			Content-Type: text/plain; charset=utf-8
+			Date: Mon, 07 Feb 2022 18:11:54 GMT
+
+			POST / HTTP/1.1
+			Host: localhost
+			Accept: */*
+			Content-Length: 6
+			User-Agent: curl/7.68.0
+
+			Hello
+			`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assertCliOutput(t, tc.args, tc.exit, trim(tc.output))

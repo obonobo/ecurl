@@ -31,7 +31,7 @@ func Run(args []string) (exitCode int) {
 	rootCmd.Parse(args[1:])
 	if *helpFlag || len(args) < 2 {
 		rootCmd.Usage()
-		return 1
+		return 2
 	}
 
 	getUsage, get := getCmd(config)
@@ -53,6 +53,6 @@ func Run(args []string) (exitCode int) {
 		return post(rest)
 	default:
 		fmt.Println(unknownCommand(config.Command, config.Subcommand))
-		return 1
+		return 2
 	}
 }
