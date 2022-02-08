@@ -466,7 +466,6 @@ func (r *reader) Read(b []byte) (int, error) {
 
 		// Read from the socket
 		n, err := r.conn.Read(r.buf.b[r.buf.red : r.buf.red+to])
-		// r.buf.b = r.buf.b[r.buf.red:n]
 		r.buf.b = r.buf.b[:n]
 		if err != nil {
 			// Record the error, but still read the contents of the buffer
