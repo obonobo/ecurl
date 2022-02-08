@@ -120,8 +120,8 @@ func BackgroundServer(port ...int) (close func(), err error) {
 
 // Starts the background server by calling the below `backgroundServer`
 // function, fails the test if the function returns an error
-func MustBackgroundServer(t *testing.T) (close func()) {
-	close, err := BackgroundServer()
+func MustBackgroundServer(t *testing.T, port ...int) (close func()) {
+	close, err := BackgroundServer(port...)
 	if err != nil {
 		t.Fatalf("Server failed to start: %v", err)
 	}

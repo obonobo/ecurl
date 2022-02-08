@@ -89,7 +89,7 @@ var middleware = struct {
 				handler.ServeHTTP(recorder, r)
 				timeTaken := time.Since(start)
 
-				log.Printf(""+
+				logger.Printf(""+
 					"%v | %v | %v | %v | %v\n",
 					pad("EchoServer", 0, MIDDLE),
 					recorder.status,
@@ -150,7 +150,19 @@ func EchoServerWithAccessLogs(
 	srv := &http.Server{
 		Addr: address,
 		Handler: http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+
+			// Chug the body. Note that we need to chug the ENTIRE body before
+			// we can echo it back. If we start to echo back before we have
+			// finished reading the body, then r.Body.Read() will throw
+			// `http.ErrBodyReadAfterClose`
+			bod, err := io.ReadAll(r.Body)
+			if err != nil {
+				panic(err)
+			}
+
 			rw.WriteHeader(http.StatusOK)
+
+			// Echo request line + headers
 			rw.Write([]byte(fmt.Sprintf("%v %v %v\r\n", r.Method, r.URL.Path, r.Proto)))
 			rw.Write([]byte(fmt.Sprintf("Host: %v\r\n", r.Host)))
 			r.Header.Write(rw)
@@ -160,9 +172,8 @@ func EchoServerWithAccessLogs(
 				rw.Write([]byte("\r\n"))
 			}
 
-			if _, err := io.Copy(rw, r.Body); err != nil {
-				panic(err)
-			}
+			// Echo body
+			rw.Write(bod)
 		}),
 	}
 
