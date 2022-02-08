@@ -2,14 +2,11 @@ package cmd
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/obonobo/ecurl/echoserver"
 	"github.com/obonobo/ecurl/internal/testutils"
 )
 
@@ -32,7 +29,7 @@ var trim = func(s string) string {
 
 // Tests POST requests with data read from file
 func TestPostDataFromFile(t *testing.T) {
-	close := mustBackgroundServer(t)
+	close := testutils.MustBackgroundServer(t)
 	defer close()
 
 	// Function for creating the CLI args
@@ -81,7 +78,7 @@ func TestPostDataFromFile(t *testing.T) {
 
 // Tests some simple GET and POST requests against the EchoServer
 func TestGetAndPostSuccess(t *testing.T) {
-	close := mustBackgroundServer(t)
+	close := testutils.MustBackgroundServer(t)
 	defer close()
 
 	for _, tc := range []struct {
@@ -231,52 +228,6 @@ func lineSet(s string) (lineSet map[string]struct{}) {
 		lineSet[l] = struct{}{}
 	}
 	return lineSet
-}
-
-// Starts the background server by calling the below `backgroundServer`
-// function, fails the test if the function returns an error
-func mustBackgroundServer(t *testing.T) (close func()) {
-	close, err := backgroundServer()
-	if err != nil {
-		t.Fatalf("Server failed to start: %v", err)
-	}
-	return close
-}
-
-// Spins up the echo server in the background, waits 30 sec max for server to
-// respond on root url
-func backgroundServer() (close func(), err error) {
-	wait := 30 * time.Second
-	errc := make(chan error, 1)
-	close, errcc := echoserver.EchoServer(addr)
-
-	// Wait for server to respond, 60 sec timeout
-	go func() {
-		timeout := time.After(wait)
-		for {
-			select {
-			case <-timeout:
-				errc <- fmt.Errorf("timeout (%v) waiting for server to start", wait)
-				close()
-				return
-			case e := <-errcc:
-				errc <- e
-				close()
-				return
-			default:
-			}
-
-			resp, err := http.Get(url)
-			if err == nil && resp.StatusCode == http.StatusOK {
-				// Server is responsive
-				errc <- nil
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-	}()
-
-	return close, <-errc
 }
 
 func mockStdoutStderr(t *testing.T) (output func() string) {

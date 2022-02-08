@@ -25,6 +25,9 @@ const (
 	POST = "POST" // Acceptable method #1
 )
 
+// The default size for the buffer used for reading responses - 1MB
+const defaultBufferSize = 1 << 20
+
 func isAcceptableProto(proto string) bool {
 	return proto == HTTP || proto == HTTPS
 }
@@ -152,6 +155,10 @@ func Get(url string) (*Response, error) {
 
 // Executes a request through a new TCP connection. Uses HTTP/1.1
 func Do(req *Request) (*Response, error) {
+	return do(req)
+}
+
+func do(req *Request, bufsize ...int) (*Response, error) {
 	conn, err := net.Dial("tcp", fmt.Sprintf("%v:%v", req.Host, req.Port))
 	if err != nil {
 		return nil, fmt.Errorf("tcp dial error: %w", err)
@@ -176,18 +183,29 @@ func Do(req *Request) (*Response, error) {
 	}
 
 	// Return response
-	resp, err := readResponse(conn)
+	resp, err := readResponse(conn, bufsize...)
 	if err != nil {
 		conn.Close()
 	}
 	return resp, err
 }
 
-func readResponse(conn net.Conn) (*Response, error) {
+func readResponse(conn net.Conn, bufsize ...int) (*Response, error) {
 	response := &Response{Body: io.NopCloser(bytes.NewBufferString(""))}
 
-	// 1 MB buffer for reading response
-	buf := buffer{make([]byte, 1<<20), 0}
+	// If you pass in your own bufsize (optional), it must be at least 64 bytes
+	// but not greater than 128MB
+	size := defaultBufferSize
+	if len(bufsize) > 0 {
+		size = bufsize[0]
+		min, max := 1<<6, 1<<27
+		if size < min {
+			size = min
+		} else if size > max {
+			size = max
+		}
+	}
+	buf := buffer{make([]byte, size), 0}
 
 	// Read status line
 	if err := buf.readStatusLine(response, conn); err != nil {
@@ -446,8 +464,10 @@ func (r *reader) Read(b []byte) (int, error) {
 			}
 		}
 
+		// Read from the socket
 		n, err := r.conn.Read(r.buf.b[r.buf.red : r.buf.red+to])
-		r.buf.b = r.buf.b[r.buf.red:n]
+		// r.buf.b = r.buf.b[r.buf.red:n]
+		r.buf.b = r.buf.b[:n]
 		if err != nil {
 			// Record the error, but still read the contents of the buffer
 			r.err = fmt.Errorf("tcp read: %w", err)
