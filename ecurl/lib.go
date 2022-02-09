@@ -19,6 +19,7 @@ func Post(url, contentType string, body io.Reader) (*Response, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Post(%v, ...) failed: %w", url, err)
 	}
+	req.Headers.Add("Content-Type", contentType)
 	return Do(req)
 }
 
@@ -89,24 +90,56 @@ func readResponse(conn net.Conn, bufsize ...int) (*Response, error) {
 		return response, err
 	}
 
-	/*
-		We need to determine the length of the transfer per RFC 2616:
+	// Attach the appropriate body reader
+	if bod := createBodyReader(response, conn, scnr); bod != nil {
+		response.Body = bod
+	}
 
-		1. 1xx, 204, 304 => length = 0
-		2. Transfer-Encoding => determine length from chunked transfer coding
-		3. Content-Length => length = Content-Length
-		4. Media type "multipart/byteranges" => body delimites its own transfer length
-		5. Server closes connection...
-	*/
+	// Attach the gzip decoder if needed
+	if needsGzip(response) {
+		if r, err := NewGzipper(response.Body); err == nil {
+			response.Body = r
+		}
+	}
 
+	return response, nil
+}
+
+func needsGzip(response *Response) bool {
+	if ce, ok := response.Headers["Content-Encoding"]; ok {
+		return strings.ToLower(ce) == "gzip"
+	}
+	return false
+}
+
+// Creates the approriate body reader depending on how the response body should
+// be read.
+//
+// We need to determine the length of the transfer per RFC 2616:
+//
+// 1. 1xx, 204, 304 => length = 0
+//
+// 2. Transfer-Encoding => determine length from chunked transfer coding
+//
+// 3. Content-Length => length = Content-Length
+//
+// 4. Media type "multipart/byteranges" => body delimites its own transfer length
+//
+// 5. Server closes connection...
+func createBodyReader(
+	response *Response,
+	conn net.Conn,
+	scnr *BufferedScanner,
+) io.ReadCloser {
 	// 1. Status code is 1xx, 204, 304, then this message is not supposed to
 	// have a body per RFC
 	if response.StatusCode == 204 ||
 		response.StatusCode == 304 ||
-		(response.StatusCode >= 100 && response.StatusCode <= 199) {
+		response.StatusCode >= 100 &&
+			response.StatusCode <= 199 {
 		// We will discard any body that the server has written to the socket
 		conn.Close()
-		return response, nil
+		return nil
 	}
 
 	// 2. Check for a Transfer-Encoding header, if it does not read "identity",
@@ -114,32 +147,28 @@ func readResponse(conn net.Conn, bufsize ...int) (*Response, error) {
 	if useChunked := chunkedCoded(response); useChunked {
 		// Return a response whose body reader reads according to chunked
 		// transfer coding
-		response.Body = &chunkedReader{conn: conn, scnr: scnr}
-		return response, nil
+		return &chunkedReader{conn: conn, scnr: scnr}
 	}
 
 	// 3. Read Content-Length header
-	if useCL, cl := contentLengthDelimited(response); useCL {
+	if useContentLength, cl := contentLengthDelimited(response); useContentLength {
 		if cl == 0 {
 			conn.Close()
-			return response, nil
+			return nil
 		}
-		response.Body = &contentLengthReader{conn: conn, scnr: scnr, clen: cl}
-		return response, nil
+		return &contentLengthReader{conn: conn, scnr: scnr, clen: cl}
 	}
 
 	// 4. Media type `multipart/byteranges` does not require content length
 	if useMpbr := multipartByterangesDelimited(response); useMpbr {
-		response.Body = &multipartByterangesReader{conn: conn, scnr: scnr}
-		return response, nil
+		return &multipartByteRangesReader{conn: conn, scnr: scnr}
 	}
 
 	// 5. Otherwise, we are supposed to read until the server closes the socket.
-	// We will set a read deadline of 5 seconds and we will reset that deadline
-	// if the server sends some more data
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	response.Body = &infiniteReader{conn: conn, scnr: scnr}
-	return response, nil
+	// We will set a read deadline and we will reset that deadline if the server
+	// sends some more data
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	return &infiniteReader{conn: conn, scnr: scnr}
 }
 
 func multipartByterangesDelimited(response *Response) (yes bool) {
@@ -183,8 +212,8 @@ func contentLength(response *Response) (int, error) {
 	return contentLength, nil
 }
 
-// Reads the status line from the io.Reader r, storing it in the response. Note
-// that this is the first read into the buffer so there is no read loop, if the
+// Reads the status line from the scnr, storing it in the response. Note that
+// this is the first read into the buffer so there is no read loop, if the
 // buffer is not big enough to read the status line, we return an error
 func readStatusLine(scnr *BufferedScanner, response *Response) error {
 	line, _, err := scnr.NextLine()
@@ -211,7 +240,7 @@ func readStatusLine(scnr *BufferedScanner, response *Response) error {
 // necessary this method will load more data from the conn into the buffer to
 // continue reading headers
 func readHeaders(scanner *BufferedScanner, response *Response) error {
-	response.Headers = make(map[string]string, 20)
+	response.Headers = make(Headers, 20)
 
 	for {
 		line, _, err := scanner.NextLine()

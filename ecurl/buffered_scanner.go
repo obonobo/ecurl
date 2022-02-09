@@ -116,15 +116,27 @@ func (s *BufferedScanner) NextByte() (byte, error) {
 	return s.NextByte()
 }
 
-func (s *BufferedScanner) Read(b []byte) (int, error) {
-	for i := range b {
-		bite, err := s.NextByte()
-		if err != nil {
-			return i, err
+func (s *BufferedScanner) Read(b []byte) (red int, err error) {
+	s.loadEmpty()
+	for red < len(b) {
+		if s.cannotReadAnymore() {
+			return red, s.err
 		}
-		b[i] = bite
+
+		// Copy as many bytes as possible
+		n := copy(b[red:], s.buf.bites[s.buf.red:])
+		s.buf.red += n
+		red += n
+
+		// If we have satisfied the read request, then we are done
+		if red == len(b) {
+			break
+		}
+
+		// Otherwise, we need to load more data
+		s.load()
 	}
-	return len(b), nil
+	return red, nil
 }
 
 func (s *BufferedScanner) loadEmpty() {
@@ -150,20 +162,6 @@ func (s *BufferedScanner) cannotReadAnymore() bool {
 	return s.err != nil && s.buf.red == len(s.buf.bites)
 }
 
-func min(i1, i2 int) int {
-	if i1 < i2 {
-		return i1
-	}
-	return i2
-}
-
-func max(i1, i2 int) int {
-	if i1 > i2 {
-		return i1
-	}
-	return i2
-}
-
 // Reads a line from the buffer, returns the line read with \r\n trimmed, the
 // number of bytes read from the buffer, and an error if the line is too long
 func scanLine(buf []byte) (string, int, error) {
@@ -178,4 +176,18 @@ func scanLine(buf []byte) (string, int, error) {
 	return strings.TrimRight(string(buf), "\r\n"),
 		len(buf),
 		fmt.Errorf("read %v bytes without a newline: %w", len(buf), ErrLineTooLong)
+}
+
+func min(i1, i2 int) int {
+	if i1 < i2 {
+		return i1
+	}
+	return i2
+}
+
+func max(i1, i2 int) int {
+	if i1 > i2 {
+		return i1
+	}
+	return i2
 }

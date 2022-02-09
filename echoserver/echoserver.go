@@ -14,6 +14,17 @@ import (
 	"time"
 )
 
+// An http.ResponseWriter wrapper that records the status code of the response
+type responseRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *responseRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
 // A namespace for some middleware functions
 var middleware = struct {
 	recovery func(*log.Logger) func(http.Handler) http.Handler
@@ -74,9 +85,10 @@ var middleware = struct {
 				case position >= RIGHT: // PAD RIGHT
 					return strings.Repeat(" ", spaces) + s
 				case position == MIDDLE: // PAD CENTER
-					roundingError := spaces - (spaces/2)*2
-					return strings.Repeat(" ", roundingError+(spaces/2)) +
-						s + strings.Repeat(" ", spaces/2)
+					eitherSide := spaces / 2
+					roundingError := spaces - (eitherSide)*2
+					return strings.Repeat(" ", roundingError+(eitherSide)) +
+						s + strings.Repeat(" ", eitherSide)
 				default:
 					return s
 				}
@@ -120,26 +132,51 @@ func EchoServer(addr ...string) (cancel func(), errc <-chan error) {
 	return EchoServerWithAccessLogs(address, nil)
 }
 
-// An http.ResponseWriter wrapper that records the status code of the response
-type responseRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *responseRecorder) WriteHeader(status int) {
-	r.status = status
-	r.ResponseWriter.WriteHeader(status)
-}
-
 // Runs an EchoServer with an optional access log showing requests made to the
 // server as well as some information about the response
-func EchoServerWithAccessLogs(
+func EchoServerWithAccessLogs(addr string, logger *log.Logger) (cancel func(), errc <-chan error) {
+	return CustomEchoServer(addr, logger, func(rw http.ResponseWriter, r *http.Request) {
+
+		// Chug the body. Note that we need to chug the ENTIRE body before
+		// we can echo it back. If we start to echo back before we have
+		// finished reading the body, then r.Body.Read() will throw
+		// `http.ErrBodyReadAfterClose`
+		bod, err := io.ReadAll(r.Body)
+		if err != nil {
+			panic(err)
+		}
+
+		rw.WriteHeader(http.StatusOK)
+
+		// Echo request line + headers
+		rw.Write([]byte(fmt.Sprintf("%v %v %v\r\n", r.Method, r.URL.Path, r.Proto)))
+		rw.Write([]byte(fmt.Sprintf("Host: %v\r\n", r.Host)))
+		r.Header.Write(rw)
+
+		// Add blank line if we are printing a body
+		if r.ContentLength > 0 {
+			rw.Write([]byte("\r\n"))
+		}
+
+		// Echo body
+		rw.Write(bod)
+	})
+}
+
+// Allows you to create an EchoServer that runs a custom handlerfunc
+func CustomEchoServer(
 	addr string,
 	logger *log.Logger,
+	handler http.HandlerFunc,
 ) (
 	cancel func(),
 	errc <-chan error,
 ) {
+	// If nil handler, then this function is the same as EchoServerWithAccessLogs
+	if handler == nil {
+		return EchoServerWithAccessLogs(addr, logger)
+	}
+
 	address := ":8080" // default port binding
 	if len(addr) > 0 {
 		address = addr
@@ -148,33 +185,8 @@ func EchoServerWithAccessLogs(
 	readyc, errcc := make(chan struct{}, 1), make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.TODO())
 	srv := &http.Server{
-		Addr: address,
-		Handler: http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-
-			// Chug the body. Note that we need to chug the ENTIRE body before
-			// we can echo it back. If we start to echo back before we have
-			// finished reading the body, then r.Body.Read() will throw
-			// `http.ErrBodyReadAfterClose`
-			bod, err := io.ReadAll(r.Body)
-			if err != nil {
-				panic(err)
-			}
-
-			rw.WriteHeader(http.StatusOK)
-
-			// Echo request line + headers
-			rw.Write([]byte(fmt.Sprintf("%v %v %v\r\n", r.Method, r.URL.Path, r.Proto)))
-			rw.Write([]byte(fmt.Sprintf("Host: %v\r\n", r.Host)))
-			r.Header.Write(rw)
-
-			// Add blank line if we are printing a body
-			if r.ContentLength > 0 {
-				rw.Write([]byte("\r\n"))
-			}
-
-			// Echo body
-			rw.Write(bod)
-		}),
+		Addr:    address,
+		Handler: http.HandlerFunc(handler),
 	}
 
 	// If logs are enabled, then add a middleware that provides access logs,

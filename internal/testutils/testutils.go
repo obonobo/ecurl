@@ -3,6 +3,7 @@ package testutils
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,91 @@ import (
 
 	"github.com/obonobo/ecurl/echoserver"
 )
+
+// Spins up the echo server in the background, waits 30 sec max for server to
+// respond on root url
+func BackgroundServer(port ...int) (close func(), err error) {
+	p := 8181
+	if len(port) > 0 && port[0] > 0 {
+		p = port[0]
+	}
+	return CustomBackgroundServer(p, nil)
+}
+
+func CustomBackgroundServer(port int, handler http.HandlerFunc) (close func(), err error) {
+	addr := fmt.Sprintf(":%v", port)
+	url := fmt.Sprintf("http://localhost%v/", addr)
+	wait := 30 * time.Second
+	errc := make(chan error, 1)
+	sleep := func() { time.Sleep(100 * time.Millisecond) }
+
+	var errcc <-chan error
+	if handler == nil {
+		close, errcc = echoserver.EchoServer(addr)
+	} else {
+		close, errcc = echoserver.CustomEchoServer(addr, nil, handler)
+	}
+
+	// Wait for server to respond, 30 sec timeout
+	go func() {
+		timeout := time.After(wait)
+		for {
+			select {
+			case <-timeout:
+				errc <- fmt.Errorf("timeout (%v) waiting for server to start", wait)
+				close()
+				return
+			case e := <-errcc:
+				errc <- e
+				close()
+				return
+			default:
+			}
+			resp, err := http.Get(url)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				errc <- nil
+				return
+			}
+			sleep()
+		}
+	}()
+
+	return close, <-errc
+}
+
+// Starts the background server by calling the below `backgroundServer`
+// function, fails the test if the function returns an error
+func MustBackgroundServer(t *testing.T, port ...int) (close func()) {
+	p := 8181
+	if len(port) > 0 {
+		p = port[0]
+	}
+	return MustCustomBackgroundServer(t, p, nil)
+}
+
+func MustCustomBackgroundServer(t *testing.T, port int, handler http.HandlerFunc) (close func()) {
+	close, err := CustomBackgroundServer(port, handler)
+	if err != nil {
+		t.Fatalf("Server failed to start: %v", err)
+	}
+	return close
+}
+
+// Polls the background server until it stops responding
+func WaitForBackgroundServerToShutdown(url string) {
+	timeout := time.After(10 * time.Second)
+	for {
+		select {
+		case <-timeout:
+			return
+		default:
+		}
+		if _, err := http.Get(url); err != nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
 
 // Consumes the stdout and stderr of the current process, dumping them as a
 // single string which is produced when you call the returned `close()`
@@ -53,7 +139,9 @@ func MockStdoutStderr() (close func() string, err error) {
 	}, nil
 }
 
-// Tails the output from the CLI
+// Tails the output from the CLI. Works the same as the `tail` command line
+// tool; you can use negative n if you want to trim lines off the top, postive n
+// will return you n lines off the bottom
 func Tail(data string, n int) string {
 	switch {
 	case n < 0:
@@ -72,58 +160,33 @@ func Tail(data string, n int) string {
 			return strings.Join(lines, "\n")
 		}
 		return strings.Join(lines[len(lines)-n:], "\n")
+	default:
+		return data
 	}
-	return data
 }
 
-// Spins up the echo server in the background, waits 30 sec max for server to
-// respond on root url
-func BackgroundServer(port ...int) (close func(), err error) {
-	p := 8181
-	if len(port) > 0 && port[0] > 0 {
-		p = port[0]
-	}
-	addr := fmt.Sprintf(":%v", p)
-	url := fmt.Sprintf("http://localhost%v/", addr)
-	wait := 30 * time.Second
-	errc := make(chan error, 1)
-	close, errcc := echoserver.EchoServer(addr)
-
-	// Wait for server to respond, 60 sec timeout
-	go func() {
-		timeout := time.After(wait)
-		for {
-			select {
-			case <-timeout:
-				errc <- fmt.Errorf("timeout (%v) waiting for server to start", wait)
-				close()
-				return
-			case e := <-errcc:
-				errc <- e
-				close()
-				return
-			default:
-			}
-
-			resp, err := http.Get(url)
-			if err == nil && resp.StatusCode == http.StatusOK {
-				// Server is responsive
-				errc <- nil
-				return
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-	}()
-
-	return close, <-errc
+func TrimWhiteSpace(s string) string {
+	whitespace := " \r\n\t"
+	return strings.Trim(s, whitespace)
 }
 
-// Starts the background server by calling the below `backgroundServer`
-// function, fails the test if the function returns an error
-func MustBackgroundServer(t *testing.T, port ...int) (close func()) {
-	close, err := BackgroundServer(port...)
-	if err != nil {
-		t.Fatalf("Server failed to start: %v", err)
+func TrimLeftWhiteSpace(s string) string {
+	whitespace := " \r\n\t"
+	return strings.TrimLeft(s, whitespace)
+}
+
+func TrimRightWhiteSpace(s string) string {
+	whitespace := " \r\n\t"
+	return strings.TrimRight(s, whitespace)
+}
+
+// Returns the gzip encoded version of your string
+func Gzipup(s string) (string, error) {
+	w := bytes.NewBuffer(make([]byte, 0, 1024))
+	gzipped := gzip.NewWriter(w)
+	gzipped.Write([]byte(s))
+	if err := gzipped.Close(); err != nil {
+		return "", err
 	}
-	return close
+	return w.String(), nil
 }

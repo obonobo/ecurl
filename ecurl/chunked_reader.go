@@ -91,7 +91,7 @@ func (c *chunkedReader) loadNextChunk() error {
 		return c.err
 	}
 
-	// Parse the chunk length
+	// Parse the chunk length - its hexadecimal btw
 	len, err := strconv.ParseInt(string(line), 16, 64)
 	if err != nil {
 		c.err = fmt.Errorf("malformed chunk: %w", err)
