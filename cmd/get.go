@@ -37,13 +37,12 @@ func (h HeadersFlagValue) Set(value string) error {
 	if value == "" {
 		return nil
 	}
-
 	split := strings.Split(value, ":")
 	if len(split) < 2 {
 		return fmt.Errorf(`format should be "k:v"`)
 	}
-
-	h[http.CanonicalHeaderKey(split[0])] = split[1]
+	trim := func(s string) string { return strings.Trim(s, " \t\n\r") }
+	h[http.CanonicalHeaderKey(trim(split[0]))] = trim(strings.Join(split[1:], ":"))
 	return nil
 }
 
@@ -93,7 +92,9 @@ func makeRequest(params GetParams, method string, body io.Reader, length int) (e
 
 	// Add headers
 	req.Headers.AddAll(params.Headers)
-	req.Headers.Add("Content-Length", fmt.Sprintf("%v", length))
+	if strings.ToLower(method) != GET {
+		req.Headers.Add("Content-Length", fmt.Sprintf("%v", length))
+	}
 
 	r, err := ecurl.Do(req)
 	if err != nil {

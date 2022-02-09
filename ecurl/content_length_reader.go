@@ -5,9 +5,7 @@ import (
 	"net"
 )
 
-// A Content-Length limited io.ReadCloser that wraps the raw TCP connection. The
-// contentLengthReader will use buf as a buffer while reading - it will read from the socket
-// in chunks of length len(buf.b), and will return io.EOF once it has read up to
+// A Content-Length limited io.ReadCloser that wraps the raw TCP connection
 type contentLengthReader struct {
 	conn net.Conn         // TCP connection
 	scnr *BufferedScanner // Scanner for reading from TCP connection

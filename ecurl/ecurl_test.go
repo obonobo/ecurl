@@ -2,6 +2,7 @@ package ecurl
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -31,6 +32,49 @@ Transfer-Encoding: chunked
 Trailer: Expires
 `, "\n")
 
+// Tests decoding gzipped responses from the EchoServer
+func TestGzip(t *testing.T) {
+	port := port + 1
+	close := testutils.MustCustomBackgroundServer(t, port, gzipEchoHandlerFunc)
+	defer close()
+	for _, tc := range []struct {
+		name string
+		data string
+	}{
+		{
+			name: "empty",
+			data: "",
+		},
+		{
+			name: "hello world",
+			data: "Hello World!",
+		},
+		{
+			name: "big",
+			data: strings.Repeat("big!?\r\n\tasdasdasd", 1024),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := Post(
+				fmt.Sprintf("http://localhost:%v", port),
+				"text/plain",
+				bytes.NewBufferString(tc.data))
+			if err != nil {
+				t.Fatalf("Expected POST to succeed but got err: %v", err)
+			}
+
+			defer resp.Body.Close()
+			bod, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("Got an error reading response body: %v", err)
+			}
+			if actual, expected := string(bod), tc.data; actual != expected {
+				t.Fatalf("Expected body '%v' but got '%v'", expected, actual)
+			}
+		})
+	}
+}
+
 // Tests decoding a big response from the EchoServer, who returns chunked
 // encoded data if the payload is large
 func TestChunkedBigMessageFromEchoServer(t *testing.T) {
@@ -50,9 +94,11 @@ func TestChunkedBigMessageFromEchoServer(t *testing.T) {
 	}
 
 	// Trim the first few lines from the response (the echo of our request headers)
-	expected := testutils.Tail(string(bod), -6)
-	if actual := msg; actual != expected {
-		t.Fatalf("Expected response body to be '%v' but got '%v'", msg, expected)
+	actual := testutils.TrimWhiteSpace(testutils.Tail(string(bod), -8))
+	expected := testutils.TrimWhiteSpace(msg)
+	if expected != actual {
+		t.Log(resp)
+		t.Fatalf("Expected response body to be '%v' but got '%v'", expected, actual)
 	}
 }
 
@@ -97,7 +143,7 @@ func TestChunkedTransferCoding(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			// t.Parallel()
 			conn := &mockNetConn{bytes.NewBufferString(tc.data)}
 			resp, err := readResponse(conn, 0)
 			if err != nil {
@@ -204,6 +250,23 @@ func TestReadResponseVariousBufSizes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A handler that echoes a gzipped response
+func gzipEchoHandlerFunc(rw http.ResponseWriter, r *http.Request) {
+	bod, err := io.ReadAll(r.Body)
+	if err != nil {
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	zipped, err := testutils.Gzipup(string(bod))
+	if err != nil {
+		rw.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	rw.Header().Add("Content-Encoding", "gzip")
+	rw.WriteHeader(http.StatusOK)
+	rw.Write([]byte(zipped))
 }
 
 // A net.Conn that delegates to a reader

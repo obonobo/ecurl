@@ -13,10 +13,7 @@ build: download
 	export GO111MODULE=on
 	go build -o $(out)
 
-# Adds some flags for building the app statically linked (run: `file app` to
-# ensure you are getting a static binary). This is needed for our multi-stage
-# docker build, where we place only the executable and the config file inside a
-# `FROM scratch` image
+# Adds some flags for static build
 build-static: download
 	export GOOS=linux
 	export GO111MODULE=on

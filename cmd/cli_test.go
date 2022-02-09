@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -60,8 +59,10 @@ func TestPostDataFromFile(t *testing.T) {
 			POST / HTTP/1.1
 			Host: localhost
 			Accept: */*
+			Accept-Encoding: gzip
 			Content-Length: 11
-			User-Agent: curl/7.68.0
+			Connection: close
+			User-Agent: ecurl/0.1.0
 
 			Hello World
 			`,
@@ -96,8 +97,9 @@ func TestGetAndPostSuccess(t *testing.T) {
 			GET / HTTP/1.1
 			Host: localhost
 			Accept: */*
-			Content-Length: 0
-			User-Agent: curl/7.68.0
+			Accept-Encoding: gzip
+			Connection: close
+			User-Agent: ecurl/0.1.0
 			`,
 		},
 		{
@@ -106,15 +108,16 @@ func TestGetAndPostSuccess(t *testing.T) {
 			exit: 0,
 			output: `
 			HTTP/1.1 200 OK
-			Content-Length: 90
+			Content-Length: 113
 			Content-Type: text/plain; charset=utf-8
 			Date: Mon, 07 Feb 2022 18:11:54 GMT
 
 			GET / HTTP/1.1
 			Host: localhost
 			Accept: */*
-			Content-Length: 0
-			User-Agent: curl/7.68.0
+			Accept-Encoding: gzip
+			Connection: close
+			User-Agent: ecurl/0.1.0
 			`,
 		},
 
@@ -127,8 +130,10 @@ func TestGetAndPostSuccess(t *testing.T) {
 			POST / HTTP/1.1
 			Host: localhost
 			Accept: */*
+			Accept-Encoding: gzip
 			Content-Length: 0
-			User-Agent: curl/7.68.0
+			User-Agent: ecurl/0.1.0
+			Connection: close
 			`,
 		},
 		{
@@ -137,48 +142,54 @@ func TestGetAndPostSuccess(t *testing.T) {
 			exit: 0,
 			output: `
 			HTTP/1.1 200 OK
-			Content-Length: 91
+			Content-Length: 133
 			Content-Type: text/plain; charset=utf-8
 			Date: Mon, 07 Feb 2022 18:11:54 GMT
 
 			POST / HTTP/1.1
 			Host: localhost
 			Accept: */*
+			Accept-Encoding: gzip
 			Content-Length: 0
-			User-Agent: curl/7.68.0
+			User-Agent: ecurl/0.1.0
+			Connection: close
 			`,
 		},
 
 		// POST, with inline body data
 		{
-			name: fmt.Sprintf("no body %v --data 'Hello\\n' %v", POST, url),
+			name: fmt.Sprintf("inline body %v --data 'Hello\\n' %v", POST, url),
 			args: []string{tool, POST, "--data", "Hello\n", url},
 			exit: 0,
 			output: `
 			POST / HTTP/1.1
 			Host: localhost
 			Accept: */*
+			Accept-Encoding: gzip
 			Content-Length: 6
-			User-Agent: curl/7.68.0
+			Connection: close
+			User-Agent: ecurl/0.1.0
 
 			Hello
 			`,
 		},
 		{
-			name: fmt.Sprintf("no body %v --data 'Hello\\n' --verbose %v", POST, url),
+			name: fmt.Sprintf("inline body %v --data 'Hello\\n' --verbose %v", POST, url),
 			args: []string{tool, POST, "--data", "Hello\n", "--verbose", url},
 			exit: 0,
 			output: `
 			HTTP/1.1 200 OK
-			Content-Length: 99
+			Content-Length: 141
 			Content-Type: text/plain; charset=utf-8
 			Date: Mon, 07 Feb 2022 18:11:54 GMT
 
 			POST / HTTP/1.1
 			Host: localhost
 			Accept: */*
+			Accept-Encoding: gzip
 			Content-Length: 6
-			User-Agent: curl/7.68.0
+			Connection: close
+			User-Agent: ecurl/0.1.0
 
 			Hello
 			`,
@@ -209,9 +220,8 @@ func assertCliOutput(
 	actual := lineSet(trim(output))
 	expected := lineSet(trim(expectedOutput))
 
-	// Assert the output
-	if !reflect.DeepEqual(expected, actual) {
-		t.Errorf("Expected CLI output '%v' but got '%v'", expected, actual)
+	if err := lineSetEqual("expected", "actual", expected, actual); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -228,6 +238,53 @@ func lineSet(s string) (lineSet map[string]struct{}) {
 		lineSet[l] = struct{}{}
 	}
 	return lineSet
+}
+
+// Checks equality of two sets. Returns an error if the sets are not equal.
+func lineSetEqual(name1, name2 string, set1, set2 map[string]struct{}) error {
+	setOneSubSetTwo := make([]string, 0, len(set1))
+	setTwoSubSetOne := make([]string, 0, len(set2))
+
+	// Fill setOneSubSetTwo
+	for k := range set1 {
+		if _, ok := set2[k]; !ok {
+			setOneSubSetTwo = append(setOneSubSetTwo, k)
+		}
+	}
+
+	// Fill setTwoSubSetOne
+	for k := range set2 {
+		if _, ok := set1[k]; !ok {
+			setTwoSubSetOne = append(setTwoSubSetOne, k)
+		}
+	}
+
+	toString := func(strs []string) (ret string) {
+		ret = "{"
+		for _, s := range strs {
+			ret += fmt.Sprintf(`"%s", `, s)
+		}
+		return ret[:len(ret)-2] + "}"
+	}
+
+	l1, l2 := len(setOneSubSetTwo), len(setTwoSubSetOne)
+	switch {
+	case l1 > 0 && l2 > 0:
+		return fmt.Errorf(
+			"%v is missing %v from %v, %v is missing %v from %v",
+			name2, toString(setOneSubSetTwo), name1,
+			name1, toString(setTwoSubSetOne), name2)
+	case l1 > 0:
+		return fmt.Errorf(
+			"%v is missing %v from %v",
+			name2, toString(setOneSubSetTwo), name1)
+	case l2 > 0:
+		return fmt.Errorf(
+			"%v is missing %v from %v",
+			name1, toString(setTwoSubSetOne), name2)
+	default:
+		return nil
+	}
 }
 
 func mockStdoutStderr(t *testing.T) (output func() string) {
