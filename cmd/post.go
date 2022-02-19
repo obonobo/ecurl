@@ -34,6 +34,9 @@ Flags:
 		the inline data will be used as the body of the request and the
 		file will be ignored.
 
+	-o, --output
+		Saves the response body to a file. Verbose output will still be
+		printed to STDERR, not to the file specified by this flag.
 `
 
 type PostParams struct {
@@ -68,6 +71,10 @@ func postCmd(config *Config) (usage func(), action func(args []string) int) {
 	postCmdFile := postCmd.String("file", "", "")
 	postCmd.StringVar(postCmdFile, "f", "", "")
 
+	// Output file
+	postCmdOutputFile := postCmd.String("output", "", "")
+	postCmd.StringVar(postCmdOutputFile, "o", "", "")
+
 	return postCmd.Usage, func(args []string) int {
 		postCmd.Parse(args)
 
@@ -76,6 +83,7 @@ func postCmd(config *Config) (usage func(), action func(args []string) int) {
 			File:       *postCmdFile,
 			GetParams: GetParams{
 				Url:     postCmd.Arg(0),
+				Output:  *postCmdOutputFile,
 				Verbose: *postCmdVerbose,
 				Headers: hfv,
 			},

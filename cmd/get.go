@@ -25,6 +25,9 @@ Flags:
 	-h, --header
 		Adds a header to your request.
 
+	-o, --output
+		Saves the response body to a file. Verbose output will still be
+		printed to STDERR, not to the file specified by this flag.
 `
 
 type HeadersFlagValue map[string]string
@@ -47,6 +50,7 @@ func (h HeadersFlagValue) Set(value string) error {
 }
 
 type GetParams struct {
+	Output  string
 	Url     string
 	Verbose bool
 	Headers map[string]string
@@ -62,17 +66,24 @@ func getCmd(config *Config) (usage func(), action func(args []string) int) {
 			strings.ToUpper(GET[:1])+GET[1:])
 	}
 
+	// Verbose
 	getCmdVerbose := getCmd.Bool("verbose", false, "")
 	getCmd.BoolVar(getCmdVerbose, "v", false, "")
 
+	// Headers
 	hfv := make(HeadersFlagValue, 10)
 	getCmd.Var(&hfv, "h", "")
 	getCmd.Var(&hfv, "header", "")
+
+	// Output file
+	getCmdOutputFile := getCmd.String("output", "", "")
+	getCmd.StringVar(getCmdOutputFile, "o", "", "")
 
 	return getCmd.Usage, func(args []string) int {
 		getCmd.Parse(args)
 		return Get(GetParams{
 			Url:     getCmd.Arg(0),
+			Output:  *getCmdOutputFile,
 			Verbose: *getCmdVerbose,
 			Headers: hfv,
 		})
@@ -90,7 +101,7 @@ func makeRequest(params GetParams, method string, body io.Reader, length int) (e
 		return 1
 	}
 
-	// Add headers
+	// Add headers``
 	req.Headers.AddAll(params.Headers)
 	if strings.ToLower(method) != GET {
 		req.Headers.Add("Content-Length", fmt.Sprintf("%v", length))
@@ -102,16 +113,38 @@ func makeRequest(params GetParams, method string, body io.Reader, length int) (e
 		return 1
 	}
 	defer r.Body.Close()
-	return printResponse(r, params.Verbose)
+
+	bodyOut := os.Stdout
+	if params.Output != "" {
+		fh, err := os.Create(params.Output)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open file: %v\n", err)
+		}
+		defer fh.Close()
+		bodyOut = fh
+	}
+
+	return printResponse(bodyOut, nil, r, params.Verbose)
 }
 
-func printResponse(r *ecurl.Response, verbose bool) (exit int) {
-	if verbose {
-		fmt.Printf("%v %v\n", r.Proto, r.Status)
-		fmt.Println(r.Headers.Printout())
+func printResponse(
+	fh, verboseOut *os.File,
+	r *ecurl.Response,
+	verbose bool,
+) (exit int) {
+	if fh == nil {
+		fh = os.Stdout
 	}
-	if _, err := io.Copy(os.Stdout, r.Body); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if verboseOut == nil {
+		verboseOut = os.Stderr
+	}
+
+	if verbose {
+		fmt.Fprintf(verboseOut, "%v %v\n", r.Proto, r.Status)
+		fmt.Fprintln(verboseOut, r.Headers.Printout())
+	}
+	if _, err := io.Copy(fh, r.Body); err != nil {
+		fmt.Fprintln(verboseOut, err)
 		return 1
 	}
 	return exit
