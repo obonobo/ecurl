@@ -22,3 +22,7 @@ go.work
 
 # Temporary testing files
 tmp-*
+
+# Build output
+httpc
+ecurl
