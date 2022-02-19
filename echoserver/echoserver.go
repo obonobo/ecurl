@@ -33,6 +33,9 @@ var middleware = struct {
 	// Catches panicking request handlers and logs the error + stack trace
 	recovery: func(logger *log.Logger) func(h http.Handler) http.Handler {
 		return func(handler http.Handler) http.Handler {
+			if logger == nil {
+				return handler
+			}
 			return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 				defer func() {
 					err := recover()

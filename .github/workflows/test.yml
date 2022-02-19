@@ -35,5 +35,5 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
       - run: make test
-      - run: make build
-      - run: make build-static
+      - run: make
+      - run: make static

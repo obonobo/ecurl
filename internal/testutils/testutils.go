@@ -127,7 +127,7 @@ func MockStdoutStderr() (close func() string, err error) {
 
 		var buf bytes.Buffer
 		io.Copy(&buf, r)
-		io.Copy(old, bytes.NewBuffer(buf.Bytes()))
+		io.Copy(old, bytes.NewBuffer(buf.Bytes())) // Also tee to stdout
 		out <- buf.String()
 	}()
 
@@ -182,7 +182,7 @@ func TrimRightWhiteSpace(s string) string {
 
 // Returns the gzip encoded version of your string
 func Gzipup(s string) (string, error) {
-	w := bytes.NewBuffer(make([]byte, 0, 1024))
+	w := bytes.NewBuffer(make([]byte, 0, len(s)))
 	gzipped := gzip.NewWriter(w)
 	gzipped.Write([]byte(s))
 	if err := gzipped.Close(); err != nil {

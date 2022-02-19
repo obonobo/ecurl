@@ -2,6 +2,7 @@ package ecurl
 
 import (
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,11 @@ import (
 	"strings"
 	"time"
 )
+
+// The default tls config that will be used by the client
+var defaultTlsConfig = &tls.Config{
+	InsecureSkipVerify: true,
+}
 
 // Execute a POST request on the url with the provided content type and body
 func Post(url, contentType string, body io.Reader) (*Response, error) {
@@ -38,9 +44,9 @@ func Do(req *Request) (*Response, error) {
 }
 
 func do(req *Request, bufsize ...int) (*Response, error) {
-	conn, err := net.Dial("tcp", fmt.Sprintf("%v:%v", req.Host, req.Port))
+	conn, err := createConn(req)
 	if err != nil {
-		return nil, fmt.Errorf("tcp dial error: %w", err)
+		return nil, err
 	}
 
 	// Write request line
@@ -66,7 +72,24 @@ func do(req *Request, bufsize ...int) (*Response, error) {
 	if err != nil {
 		conn.Close()
 	}
+
 	return resp, err
+}
+
+func createConn(req *Request) (net.Conn, error) {
+	addr := fmt.Sprintf("%v:%v", req.Host, req.Port)
+	if req.tls {
+		conn, err := tls.Dial("tcp", addr, defaultTlsConfig)
+		if err != nil {
+			return nil, fmt.Errorf("tcp dial error: %w", err)
+		}
+		return conn, err
+	}
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("tcp dial error: %w", err)
+	}
+	return conn, err
 }
 
 func readResponse(conn net.Conn, bufsize ...int) (*Response, error) {
@@ -308,17 +331,27 @@ func writeBody(w io.Writer, req *Request) error {
 	return nil
 }
 
-func splitUrl(u string) (proto, host, pth string, port int, err error) {
+func splitUrl(u string) (proto, host, pth string, port int, tls bool, err error) {
+	lu := strings.ToLower(u)
+	isHttp := strings.HasPrefix(lu, "http://")
+	isHttps := strings.HasPrefix(lu, "https://")
+
+	switch {
+	case !isHttp && !isHttps:
+		u = "http://" + u
+	case isHttps:
+		tls = true
+	}
 
 	split := strings.Split(u, "/")
 	if len(split) < 3 || split[1] != "" || split[0][len(split[0])-1] != ':' {
-		return "", "", "", 0, InvalidUrlError(u)
+		return "", "", "", 0, tls, InvalidUrlError(u)
 	}
 
 	// PROTOCOL
 	proto = strings.TrimRight(split[0], ":")
 	if !isAcceptableProto(proto) {
-		return "", "", "", 0,
+		return "", "", "", 0, tls,
 			fmt.Errorf(
 				"cannot split request url ('%v'): %w",
 				u, UnsupportedProtoError(proto))
@@ -332,7 +365,7 @@ func splitUrl(u string) (proto, host, pth string, port int, err error) {
 		p, err := strconv.Atoi(spltt[1])
 		port = p
 		if err != nil {
-			return "", "", "", 0,
+			return "", "", "", 0, tls,
 				fmt.Errorf("invalid port in: %w", InvalidUrlError(proto))
 		}
 	case 1:
@@ -342,11 +375,11 @@ func splitUrl(u string) (proto, host, pth string, port int, err error) {
 			port = 443
 		}
 	default:
-		return "", "", "", 0,
+		return "", "", "", 0, tls,
 			fmt.Errorf("invalid host string: %w", InvalidUrlError(proto))
 	}
 
 	// PATH
 	pth = "/" + path.Join(split[3:]...)
-	return proto, host, pth, port, nil
+	return proto, host, pth, port, tls, nil
 }

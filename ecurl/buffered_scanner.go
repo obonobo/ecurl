@@ -140,7 +140,7 @@ func (s *BufferedScanner) Read(b []byte) (red int, err error) {
 }
 
 func (s *BufferedScanner) loadEmpty() {
-	if len(s.buf.bites) == 0 {
+	if len(s.buf.bites) == 0 && !s.cannotReadAnymore() {
 		s.load()
 	}
 }

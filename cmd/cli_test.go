@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -13,17 +14,248 @@ const (
 	url  = "http://localhost:8181/"
 	addr = ":8181"
 	tool = "ecurl"
+	port = 8185 // Another port that can be used for concurrent testing
 )
 
-// Special trim function, should only be used in these tests (because it also
-// removes tab + carriage returns from the string)
-var trim = func(s string) string {
-	return strings.
-		ReplaceAll(strings.
-			ReplaceAll(strings.
-				Trim(s, " \n\r\t"),
-				"\t", ""),
-			"\r", "")
+// Tests following redirects (3xx response status codes)
+func TestFollowRedirects(t *testing.T) {
+	for i, tc := range []struct {
+		name       string
+		port       int
+		statusCode int
+		redirects  int
+		exitCode   int
+		output     func(port int) string
+	}{
+		{
+			name:       "301 Moved Permanently",
+			port:       port,
+			statusCode: http.StatusMovedPermanently,
+			redirects:  1,
+			exitCode:   0,
+			output: func(port int) string {
+				return fmt.Sprintf(`
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Connection: close
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+
+					HTTP/1.1 200 OK
+					Connection: close
+					Content-Length: 0
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					`, port)
+			},
+		},
+		{
+			// Note that temporary redirect may be written as "302 Found" or as
+			// "302 Moved Temporarily" by the server. Our test server returns
+			// "302 Found"
+			name:       "302 Found",
+			port:       port,
+			statusCode: http.StatusFound,
+			redirects:  1,
+			exitCode:   0,
+			output: func(port int) string {
+				return fmt.Sprintf(`
+					HTTP/1.1 302 Found
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Connection: close
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+
+					HTTP/1.1 200 OK
+					Connection: close
+					Content-Length: 0
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					`, port)
+			},
+		},
+		{
+			name:       "300 Multiple Choices",
+			port:       port,
+			statusCode: http.StatusMultipleChoices,
+			redirects:  1,
+			exitCode:   0,
+			output: func(port int) string {
+				return fmt.Sprintf(`
+					HTTP/1.1 300 Multiple Choices
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Connection: close
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+
+					HTTP/1.1 200 OK
+					Connection: close
+					Content-Length: 0
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					`, port)
+			},
+		},
+		{
+			name:       "status code=399",
+			port:       port,
+			statusCode: 399,
+			redirects:  1,
+			exitCode:   0,
+			output: func(port int) string {
+				return fmt.Sprintf(`
+					HTTP/1.1 399 status code 399
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Connection: close
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+
+					HTTP/1.1 200 OK
+					Connection: close
+					Content-Length: 0
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					`, port)
+			},
+		},
+		{
+			name:       "status code=375",
+			port:       port,
+			statusCode: 375,
+			redirects:  1,
+			exitCode:   0,
+			output: func(port int) string {
+				return fmt.Sprintf(`
+					HTTP/1.1 375 status code 375
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Connection: close
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+
+					HTTP/1.1 200 OK
+					Connection: close
+					Content-Length: 0
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					`, port)
+			},
+		},
+		{
+			name:       "many redirects",
+			port:       port,
+			statusCode: http.StatusMovedPermanently,
+			redirects:  5,
+			exitCode:   0,
+			output: func(port int) string {
+				return fmt.Sprintf(`
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Connection: close
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+					Connection: close
+
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+					Connection: close
+
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+					Connection: close
+
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+					Connection: close
+
+					HTTP/1.1 200 OK
+					Connection: close
+					Content-Length: 0
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					`, port, port, port, port, port)
+			},
+		},
+		{
+			// Client should follow up to 5 redirects per RFC
+			// For more information: https://www.w3.org/Protocols/HTTP/1.0/spec.html#Code3xx
+			name:       "too many redirects",
+			port:       port,
+			statusCode: http.StatusMovedPermanently,
+			redirects:  6,
+			exitCode:   1, // If there are too many redirects, should return an error code
+			output: func(port int) string {
+				return fmt.Sprintf(`
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Connection: close
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+					Connection: close
+
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+					Connection: close
+
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+					Connection: close
+
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+					Connection: close
+
+					HTTP/1.1 301 Moved Permanently
+					Date: Sat, 19 Feb 2022 05:17:58 GMT
+					Content-Length: 0
+					Location: http://localhost:%v/redirect
+					Connection: close
+
+					Maximum number of redirects (5) exceeded...
+					`, port, port, port, port, port, port)
+			},
+		},
+	} {
+		tc := tc
+		p := tc.port + i
+		t.Run(fmt.Sprintf(
+			"%v[status=%v,redirects=%v]",
+			tc.name, tc.statusCode, tc.redirects),
+			func(t *testing.T) {
+				close, reset := RedirectingBackgroundServer(t, p, tc.redirects, tc.statusCode)
+				defer close()
+
+				t.Run(GET, func(t *testing.T) {
+					assertCliOutput(t, []string{
+						tool, GET, "-v", "--location",
+						fmt.Sprintf("http://localhost:%v/", p),
+					}, tc.exitCode, tc.output(p))
+				})
+
+				reset()
+				t.Run(POST, func(t *testing.T) {
+					assertCliOutput(t, []string{
+						tool, POST, "-v", "--location",
+						fmt.Sprintf("http://localhost:%v/", p),
+					}, tc.exitCode, tc.output(p))
+				})
+			})
+	}
 }
 
 // Tests POST requests with data read from file
@@ -320,4 +552,32 @@ func mustCreateTempFile(
 		t.Fatalf("Failed to seek to beginning of file '%v'", fh.Name())
 	}
 	return fh, delete
+}
+
+// Special trim function, should only be used in these tests (because it also
+// removes tab + carriage returns from the string)
+func trim(s string) string {
+	return strings.
+		ReplaceAll(strings.
+			ReplaceAll(strings.
+				Trim(s, " \n\r\t"),
+				"\t", ""),
+			"\r", "")
+}
+
+func RedirectingBackgroundServer(
+	t *testing.T,
+	port, maxRedirects, statusCode int,
+) (close func(), resetCount func()) {
+	maxRedirects++
+	var redirects int
+	return testutils.MustCustomBackgroundServer(t, port, func(rw http.ResponseWriter, r *http.Request) {
+		redirects = (redirects + 1) % maxRedirects
+		if redirects == 0 {
+			rw.WriteHeader(http.StatusOK)
+			return
+		}
+		rw.Header().Add("Location", fmt.Sprintf("http://localhost:%v/redirect", port))
+		rw.WriteHeader(statusCode)
+	}), func() { redirects = 0 }
 }

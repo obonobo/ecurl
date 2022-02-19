@@ -54,12 +54,13 @@ func TestBufferedScannerRead(t *testing.T) {
 
 		{
 			name:     "very big",
-			input:    strings.Repeat("very big!\n", 1<<10),
+			input:    strings.Repeat("very big!\n", 1<<16),
 			bufsizes: bufsizes(),
 		},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			for _, size := range tc.bufsizes {
 				size := size
 				t.Run(fmt.Sprintf("size=%v", size), func(t *testing.T) {
