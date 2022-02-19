@@ -18,8 +18,18 @@ type Request struct {
 	Host    string
 	Path    string
 	Port    int
+	url     string
 	Headers Headers
 	Body    io.Reader
+}
+
+func (r *Request) Clone() (*Request, error) {
+	rr, err := NewRequest(r.Method, r.url, r.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to clone request: %w", err)
+	}
+	rr.Headers.AddAll(r.Headers)
+	return rr, nil
 }
 
 func (r *Request) String() string {
@@ -60,7 +70,7 @@ func NewBlankRequest(method string, url string, body io.Reader) (*Request, error
 
 func newBlankRequest(
 	method string,
-	url string,
+	urll string,
 	body io.Reader,
 ) (
 	r *Request,
@@ -72,12 +82,13 @@ func newBlankRequest(
 		return nil, "", UnsupportedHttpMethod(method)
 	}
 
-	_, host, path, port, err := splitUrl(url)
+	_, host, path, port, err := splitUrl(urll)
 	if err != nil {
 		return nil, "", fmt.Errorf("error parsing url: %w", err)
 	}
 
 	r = &Request{
+		url:     urll,
 		Method:  method,
 		Port:    port,
 		Path:    path,

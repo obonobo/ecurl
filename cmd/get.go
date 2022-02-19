@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -13,7 +14,8 @@ import (
 
 const GET = "get"
 
-const GetUsage = `usage: %v %v [-v] [-h "k:v"]* URL
+var GetUsage = strings.TrimLeft(`
+usage: %v %v [-v] [-h "k:v"]* [-o file] [-L] URL
 
 %v performs an HTTP GET request on URL
 
@@ -28,7 +30,10 @@ Flags:
 	-o, --output
 		Saves the response body to a file. Verbose output will still be
 		printed to STDERR, not to the file specified by this flag.
-`
+
+	-L, --location
+		Follow redirects up to 5 times.
+`, "\n\r\t ")
 
 type HeadersFlagValue map[string]string
 
@@ -50,10 +55,11 @@ func (h HeadersFlagValue) Set(value string) error {
 }
 
 type GetParams struct {
-	Output  string
-	Url     string
-	Verbose bool
-	Headers map[string]string
+	FollowRedirects bool
+	Output          string
+	Url             string
+	Verbose         bool
+	Headers         map[string]string
 }
 
 func getCmd(config *Config) (usage func(), action func(args []string) int) {
@@ -79,13 +85,28 @@ func getCmd(config *Config) (usage func(), action func(args []string) int) {
 	getCmdOutputFile := getCmd.String("output", "", "")
 	getCmd.StringVar(getCmdOutputFile, "o", "", "")
 
+	// Follow redirects
+	getCmdFollowRedirects := getCmd.Bool("location", false, "")
+	getCmd.BoolVar(getCmdFollowRedirects, "L", false, "")
+
 	return getCmd.Usage, func(args []string) int {
 		getCmd.Parse(args)
+
+		url := getCmd.Arg(0)
+
+		if url == "" {
+			fmt.Fprintln(os.Stderr, "Please provide a url.")
+			fmt.Fprintf(os.Stderr,
+				`usage: %v %v [-v] [-h "k:v"]* URL`+"\n", config.Command, GET)
+			return 2
+		}
+
 		return Get(GetParams{
-			Url:     getCmd.Arg(0),
-			Output:  *getCmdOutputFile,
-			Verbose: *getCmdVerbose,
-			Headers: hfv,
+			Url:             url,
+			FollowRedirects: *getCmdFollowRedirects,
+			Output:          *getCmdOutputFile,
+			Verbose:         *getCmdVerbose,
+			Headers:         hfv,
 		})
 	}
 }
@@ -95,13 +116,23 @@ func Get(params GetParams) (exit int) {
 }
 
 func makeRequest(params GetParams, method string, body io.Reader, length int) (exit int) {
-	req, err := ecurl.NewRequest(method, params.Url, body)
+	bodyCopy := []byte{}
+	if body != nil {
+		cp, err := io.ReadAll(body)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to read request body: %v\n", err)
+			return 1
+		}
+		bodyCopy = cp
+	}
+
+	req, err := ecurl.NewRequest(method, params.Url, io.NopCloser(bytes.NewBuffer(bodyCopy)))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
-	// Add headers``
+	// Add headers
 	req.Headers.AddAll(params.Headers)
 	if strings.ToLower(method) != GET {
 		req.Headers.Add("Content-Length", fmt.Sprintf("%v", length))
@@ -112,7 +143,8 @@ func makeRequest(params GetParams, method string, body io.Reader, length int) (e
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	defer r.Body.Close()
+	rrr := r
+	defer rrr.Body.Close()
 
 	bodyOut := os.Stdout
 	if params.Output != "" {
@@ -124,7 +156,59 @@ func makeRequest(params GetParams, method string, body io.Reader, length int) (e
 		bodyOut = fh
 	}
 
+	followRedirects := 5
+	if !params.FollowRedirects {
+		followRedirects = 0
+	}
+
+	for i := 0; ; i++ {
+		rr, needs := needsRedirect(r, req)
+		if !needs {
+			break
+		}
+		if i >= followRedirects {
+			fmt.Fprintf(os.Stderr,
+				"Maximum number of redirects (%v) exceeded...\n", followRedirects)
+			return 1
+		}
+
+		// If we need to follow a redirect, then print this current response
+		// without a body
+		clone := r.Clone()
+		clone.Body = io.NopCloser(bytes.NewBufferString(""))
+		printResponse(bodyOut, nil, clone, params.Verbose)
+
+		rr.Body = io.NopCloser(bytes.NewBuffer(bodyCopy))
+		r, err = ecurl.Do(rr)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		rrr := r
+		defer rrr.Body.Close()
+	}
+
 	return printResponse(bodyOut, nil, r, params.Verbose)
+}
+
+// Parse response headers and determine if the response demands a redirect
+func needsRedirect(resp *ecurl.Response, req *ecurl.Request) (r *ecurl.Request, needs bool) {
+	is300 := resp.StatusCode < 300 || resp.StatusCode > 399
+	if is300 {
+		return nil, false
+	}
+
+	location, ok := resp.Headers["Location"]
+	if !ok {
+		return nil, false
+	}
+
+	rr, err := ecurl.NewRequest(req.Method, location, req.Body)
+	if err != nil {
+		return nil, false
+	}
+
+	return rr, true
 }
 
 func printResponse(

@@ -66,6 +66,7 @@ func do(req *Request, bufsize ...int) (*Response, error) {
 	if err != nil {
 		conn.Close()
 	}
+
 	return resp, err
 }
 

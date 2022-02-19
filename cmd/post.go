@@ -13,7 +13,8 @@ import (
 
 const POST = "post"
 
-const PostUsage = `usage: %v %v [-v] [-h "k:v"]* [-d inline-data] [-f file] URL
+var PostUsage = strings.TrimLeft(`
+usage: %v %v [-v] [-h "k:v"]* [-d inline-data] [-f file] [-o file] [-L] URL
 
 %v performs an HTTP POST request on URL
 
@@ -37,7 +38,10 @@ Flags:
 	-o, --output
 		Saves the response body to a file. Verbose output will still be
 		printed to STDERR, not to the file specified by this flag.
-`
+
+	-L, --location
+		Follow redirects up to 5 times.
+`, "\n\t\r ")
 
 type PostParams struct {
 	GetParams
@@ -75,6 +79,10 @@ func postCmd(config *Config) (usage func(), action func(args []string) int) {
 	postCmdOutputFile := postCmd.String("output", "", "")
 	postCmd.StringVar(postCmdOutputFile, "o", "", "")
 
+	// Follow redirects
+	postCmdFollowRedirects := postCmd.Bool("location", false, "")
+	postCmd.BoolVar(postCmdFollowRedirects, "L", false, "")
+
 	return postCmd.Usage, func(args []string) int {
 		postCmd.Parse(args)
 
@@ -82,10 +90,11 @@ func postCmd(config *Config) (usage func(), action func(args []string) int) {
 			InlineData: *postCmdData,
 			File:       *postCmdFile,
 			GetParams: GetParams{
-				Url:     postCmd.Arg(0),
-				Output:  *postCmdOutputFile,
-				Verbose: *postCmdVerbose,
-				Headers: hfv,
+				FollowRedirects: *postCmdFollowRedirects,
+				Url:             postCmd.Arg(0),
+				Output:          *postCmdOutputFile,
+				Verbose:         *postCmdVerbose,
+				Headers:         hfv,
 			},
 		}
 
