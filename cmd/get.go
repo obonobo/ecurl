@@ -215,11 +215,7 @@ func needsRedirect(resp *ecurl.Response, req *ecurl.Request) (r *ecurl.Request, 
 	return rr, true
 }
 
-func printResponse(
-	fh, verboseOut *os.File,
-	r *ecurl.Response,
-	verbose bool,
-) (exit int) {
+func printResponse(fh, verboseOut *os.File, r *ecurl.Response, verbose bool) (exit int) {
 	if fh == nil {
 		fh = os.Stdout
 	}

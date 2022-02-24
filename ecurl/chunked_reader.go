@@ -35,12 +35,14 @@ func (c *chunkedReader) Read(b []byte) (int, error) {
 		// all the trailers
 		if c.chunk.last {
 			_, err := c.readTrailers()
+			c.err = err
 			return red, err // Possibly an EOF which needs to be returned
 		}
 
 		// If we are done reading the chunk, then load another chunk
 		if c.chunkIsDone() {
 			if err := c.loadNextChunk(); err != nil {
+				c.err = err
 				return red, err
 			}
 		}
@@ -49,6 +51,7 @@ func (c *chunkedReader) Read(b []byte) (int, error) {
 		n, err := c.readChunk(b[red:])
 		red += n
 		if err != nil {
+			c.err = err
 			return red, err
 		}
 	}
@@ -108,7 +111,6 @@ func (c *chunkedReader) chunkIsDone() bool {
 }
 
 func (c *chunkedReader) Close() error {
-	c.scnr = nil
-	c.err = ErrResponseBodyClosed
+	// We won't register this error, let the scanner return the error if need be
 	return c.conn.Close()
 }

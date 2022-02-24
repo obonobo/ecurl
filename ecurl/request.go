@@ -3,6 +3,8 @@ package ecurl
 import (
 	"fmt"
 	"io"
+	"path"
+	"strconv"
 	"strings"
 )
 
@@ -101,4 +103,57 @@ func newBlankRequest(
 	}
 
 	return r, host, nil
+}
+
+func splitUrl(u string) (proto, host, pth string, port int, tls bool, err error) {
+	lu := strings.ToLower(u)
+	isHttp := strings.HasPrefix(lu, "http://")
+	isHttps := strings.HasPrefix(lu, "https://")
+
+	switch {
+	case !isHttp && !isHttps:
+		u = "http://" + u
+	case isHttps:
+		tls = true
+	}
+
+	split := strings.Split(u, "/")
+	if len(split) < 3 || split[1] != "" || split[0][len(split[0])-1] != ':' {
+		return "", "", "", 0, tls, InvalidUrlError(u)
+	}
+
+	// PROTOCOL
+	proto = strings.TrimRight(split[0], ":")
+	if !isAcceptableProto(proto) {
+		return "", "", "", 0, tls,
+			fmt.Errorf(
+				"cannot split request url ('%v'): %w",
+				u, UnsupportedProtoError(proto))
+	}
+
+	// HOST
+	spltt := strings.Split(split[2], ":")
+	switch len(spltt) {
+	case 2:
+		host = spltt[0]
+		p, err := strconv.Atoi(spltt[1])
+		port = p
+		if err != nil {
+			return "", "", "", 0, tls,
+				fmt.Errorf("invalid port in: %w", InvalidUrlError(proto))
+		}
+	case 1:
+		host = spltt[0]
+		port = 80
+		if proto == "https" {
+			port = 443
+		}
+	default:
+		return "", "", "", 0, tls,
+			fmt.Errorf("invalid host string: %w", InvalidUrlError(proto))
+	}
+
+	// PATH
+	pth = "/" + path.Join(split[3:]...)
+	return proto, host, pth, port, tls, nil
 }
