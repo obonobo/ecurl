@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/obonobo/ecurl/internal/mocks"
 	"github.com/obonobo/ecurl/internal/testutils"
 )
 
@@ -144,7 +143,7 @@ func TestChunkedTransferCoding(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			// t.Parallel()
-			conn := &mockNetConn{bytes.NewBufferString(tc.data)}
+			conn := &mocks.MockNetConn{Reader: bytes.NewBufferString(tc.data)}
 			resp, err := readResponse(conn, 0)
 			if err != nil {
 				t.Fatalf("Expected response to succeed but got err: %v", err)
@@ -267,41 +266,4 @@ func gzipEchoHandlerFunc(rw http.ResponseWriter, r *http.Request) {
 	rw.Header().Add("Content-Encoding", "gzip")
 	rw.WriteHeader(http.StatusOK)
 	rw.Write([]byte(zipped))
-}
-
-// A net.Conn that delegates to a reader
-type mockNetConn struct {
-	io.Reader
-}
-
-func (c *mockNetConn) Read(b []byte) (n int, err error) {
-	return c.Reader.Read(b)
-}
-
-func (c *mockNetConn) Write(b []byte) (n int, err error) {
-	panic("not implemented") // TODO: Implement
-}
-
-func (c *mockNetConn) Close() error {
-	return nil
-}
-
-func (c *mockNetConn) LocalAddr() net.Addr {
-	panic("not implemented") // TODO: Implement
-}
-
-func (c *mockNetConn) RemoteAddr() net.Addr {
-	panic("not implemented") // TODO: Implement
-}
-
-func (c *mockNetConn) SetDeadline(t time.Time) error {
-	panic("not implemented") // TODO: Implement
-}
-
-func (c *mockNetConn) SetReadDeadline(t time.Time) error {
-	panic("not implemented") // TODO: Implement
-}
-
-func (c *mockNetConn) SetWriteDeadline(t time.Time) error {
-	panic("not implemented") // TODO: Implement
 }

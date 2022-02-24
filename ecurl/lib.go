@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/textproto"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,9 @@ import (
 var defaultTlsConfig = &tls.Config{
 	InsecureSkipVerify: true,
 }
+
+// A regex for grabbing the Content-Type boundary field
+var reContentTypeBoundary = regexp.MustCompile(`(?i)(boundary=)([\w\d]+)`)
 
 // Execute a POST request on the url with the provided content type and body
 func Post(url, contentType string, body io.Reader) (*Response, error) {
@@ -182,8 +186,8 @@ func createBodyReader(
 	}
 
 	// 4. Media type `multipart/byteranges` does not require content length
-	if useMpbr := multipartByterangesDelimited(response); useMpbr {
-		return &multipartByteRangesReader{conn: conn, scnr: scnr}
+	if useMpbr, boundary := multipartByterangesDelimited(response); useMpbr {
+		return &MultipartByteRangesReader{Boundary: boundary, Conn: conn, Reader: scnr}
 	}
 
 	// 5. Otherwise, we are supposed to read until the server closes the socket.
@@ -193,9 +197,23 @@ func createBodyReader(
 	return &infiniteReader{conn: conn, scnr: scnr}
 }
 
-func multipartByterangesDelimited(response *Response) (yes bool) {
+// According to the RFC, it is not mandatory to specify Content-Length when the
+// response is multipart/byteranges delimited because the media type can
+// self-delimit. Usually, Content-Length is specified in this kind of response.
+// If that is the case, then the caller of this function should check
+// Content-Length before trying to use this function.
+func multipartByterangesDelimited(response *Response) (yes bool, boundary string) {
 	ct, ok := response.Headers["Content-Type"]
-	return ok && strings.HasPrefix("multipart/byteranges", strings.ToLower(ct))
+	if !ok {
+		return false, ""
+	}
+	if !strings.HasPrefix("multipart/byteranges", strings.ToLower(ct)) {
+		return false, ""
+	}
+	if boundary = reContentTypeBoundary.FindStringSubmatch(ct)[2]; boundary == "" {
+		return false, "" // Cannot determine boundary - is this an error?
+	}
+	return true, boundary
 }
 
 func contentLengthDelimited(response *Response) (yes bool, cl int) {
