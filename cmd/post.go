@@ -98,8 +98,7 @@ func postCmd(config *Config) (usage func(), action func(args []string) int) {
 			},
 		}
 
-		if exit, msg := checkPostParams(params); exit != 0 {
-			fmt.Println(msg)
+		if exit := checkPostParams(params, config.Command); exit != 0 {
 			return exit
 		}
 
@@ -107,12 +106,21 @@ func postCmd(config *Config) (usage func(), action func(args []string) int) {
 	}
 }
 
-func checkPostParams(params PostParams) (exit int, msg string) {
+func checkPostParams(params PostParams, command string) (exit int) {
 	if params.File != "" && params.InlineData != "" {
 		fmt.Fprintln(os.Stderr, "WARNING: flag -f/--file has no "+
 			"effect when used alongside flag -d/--data")
 	}
-	return 0, ""
+
+	if params.Url == "" {
+		fmt.Fprintln(os.Stderr, "Please provide a url.")
+		fmt.Fprintf(os.Stderr,
+			`%v %v [-v] [-h "k:v"]* [-d inline-data] [-f file] [-o file] [-L] URL`+"\n",
+			command, POST)
+		return 2
+	}
+
+	return 0
 }
 
 func Post(params PostParams) (exit int) {
