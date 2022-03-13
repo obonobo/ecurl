@@ -4,7 +4,6 @@ default: build
 SHELL = bash
 out = httpc
 # out = ecurl
-test_timeout = 30s
 
 download:
 	go get -d -v
@@ -28,4 +27,4 @@ clean:
 	rm -rf ./$(out) ./vendor
 
 test:
-	go clean --testcache && go test -v -timeout $(test_timeout) ./...
+	go clean --testcache && go test -v -timeout '30s' ./...
