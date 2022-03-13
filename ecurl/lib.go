@@ -187,7 +187,17 @@ func createBodyReader(
 
 	// 4. Media type `multipart/byteranges` does not require content length
 	if useMpbr, boundary := multipartByterangesDelimited(response); useMpbr {
-		return &MultipartByteRangesReader{Boundary: boundary, Conn: conn, Reader: scnr}
+		// ??? noop for now
+		// ???
+		// ??? I don't want to enable this because it will actually decode the
+		// ??? response as multipart/byteranges, which I'm not sure what I want
+		// ??? as the intended behaviour of the CLI here. Like maybe we should
+		// ??? just forward the body as is (not decoded) if it is
+		// ??? multipart/byteranges, and the caller will have to decide
+		// ??? themselves if they want to wrap their reader in a byteranges
+		// ??? decoder.
+		fmt.Printf("boundary: %v\n", boundary)
+		// return &MultipartByteRangesReader{Boundary: boundary, Conn: conn, Reader: scnr}
 	}
 
 	// 5. Otherwise, we are supposed to read until the server closes the socket.
