@@ -8,18 +8,17 @@ default: build
 
 SHELL = bash
 out = httpfs
-# out = ecurl
+buildcmd = cargo build --workspace --release
 
 download:
 	cargo fetch
 
 build: download
-	cargo build --release
+	$(buildcmd)
 
-# Adds some flags for static build
+# Build statically linked against glibc
 static: download
-	export RUST_FLAGS="-C target-feature=+crt-static"
-	cargo build --release
+	RUSTFLAGS='-C target-feature=+crt-static' $(buildcmd) --target x86_64-unknown-linux-gnu
 
 clean:
 	cargo clean

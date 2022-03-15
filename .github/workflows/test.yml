@@ -18,10 +18,11 @@ on:
         description: "Test scenario tags"
 
 jobs:
-  test:
-    name: test
+  test-go:
+    name: Run Go tests
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: true
       matrix:
         go-version:
           - "1.17"
@@ -34,6 +35,27 @@ jobs:
         uses: actions/setup-go@v2
         with:
           go-version: ${{ matrix.go-version }}
+      - run: make test
+      - run: make
+      - run: make static
+
+  test-rust:
+    name: Run Rust tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    strategy:
+      fail-fast: true
+      matrix:
+        rust-version:
+          - stable
+    steps:
+      - uses: actions/checkout@v2
+      - name: Use rust ${{ matrix.rust-version }}
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust-version }}
       - run: make test
       - run: make
       - run: make static

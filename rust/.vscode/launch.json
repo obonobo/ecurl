@@ -1,0 +1,47 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Launch current file",
+      "program": "${workspaceRoot}/target/debug/${fileBasenameNoExtension}",
+      // "program": "${fileDirname}/../target/debug/${fileBasenameNoExtension}",
+      "args": [],
+      "cwd": "${workspaceRoot}",
+      "sourceLanguages": ["rust"]
+    },
+
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable 'httpfs'",
+      "cargo": {
+        "args": ["build", "--bin=httpfs", "--package=httpfs"],
+        "filter": {
+          "name": "httpfs",
+          "kind": "bin"
+        }
+      },
+      "args": ["--verbose", "--dir", "./"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in executable 'httpfs'",
+      "cargo": {
+        "args": ["test", "--no-run", "--bin=httpfs", "--package=httpfs"],
+        "filter": {
+          "name": "httpfs",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
