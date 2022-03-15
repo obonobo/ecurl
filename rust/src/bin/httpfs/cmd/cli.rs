@@ -1,10 +1,11 @@
 use clap::Parser;
-use std::{ffi::OsString, path::PathBuf};
+use httpfs::server::Server;
 
-use super::utils;
-
-pub const EXIT_NOT_OKAY: i32 = 1;
-pub const EXIT_OKAY: i32 = 0;
+use crate::cmd::{
+    config::{Config, LOCALHOST},
+    exit::{EXIT_NOT_OKAY, EXIT_OKAY},
+    utils,
+};
 
 /// Runs the CLI and exits with an error code.
 pub fn run_and_exit() -> ! {
@@ -12,9 +13,12 @@ pub fn run_and_exit() -> ! {
 }
 
 /// Runs the CLI on the iterable args provided. Returns program exit code.
-pub fn run<T: Into<OsString> + Clone>(args: impl IntoIterator<Item = T>) -> i32 {
-    let cfg = match Cli::try_parse_from(args) {
-        Ok(cfg) => cfg,
+pub fn run(args: impl Iterator<Item = String>) -> i32 {
+    let cfg = match Config::try_parse_from(args) {
+        Ok(cfg) => match cfg.verify() {
+            Ok(cfg) => cfg,
+            Err(_) => return EXIT_NOT_OKAY,
+        },
         Err(e) => {
             eprintln!("{}", e);
             return EXIT_NOT_OKAY;
@@ -22,25 +26,20 @@ pub fn run<T: Into<OsString> + Clone>(args: impl IntoIterator<Item = T>) -> i32 
     };
 
     utils::logging::init_logging(cfg.verbose);
-    log::info!("CONFIG: {:?}", cfg);
+    log::info!("Configuration: {}", cfg);
 
-    std::process::exit(EXIT_OKAY)
-}
+    let srv = Server {
+        addr: LOCALHOST,
+        dir: cfg.dir,
+        port: cfg.port,
+        n_workers: num_cpus::get(),
+    };
 
-/// httpfs is a simple file server
-#[derive(Parser, Debug, Hash, Clone, Default)]
-#[clap(author, version, about, long_about = None)]
-struct Cli {
-    /// Prints debugging messages.
-    #[clap(short, long)]
-    verbose: bool,
-
-    /// Specifies the directory that the server will use to read/write requested
-    /// files. Default is the current directory when launching the application.
-    #[clap(short, long, default_value = "./")]
-    dir: PathBuf,
-
-    /// Specifies the port number that the server will listen and serve at.
-    #[clap(short, long, default_value_t = 8080)]
-    port: i32,
+    std::process::exit(match srv.serve() {
+        Ok(_) => EXIT_OKAY,
+        Err(e) => {
+            log::info!("{}", e);
+            EXIT_NOT_OKAY
+        }
+    })
 }

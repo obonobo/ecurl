@@ -18,7 +18,9 @@ build: download
 
 # Build statically linked against glibc
 static: download
-	RUSTFLAGS='-C target-feature=+crt-static' $(buildcmd) --target x86_64-unknown-linux-gnu
+	RUSTFLAGS='-C target-feature=+crt-static' \
+		$(buildcmd) \
+			--target x86_64-unknown-linux-gnu
 
 clean:
 	cargo clean
