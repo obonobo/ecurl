@@ -1,12 +1,16 @@
-use std::{fmt::Display, io::Read, str};
+use std::{
+    fmt::{Debug, Display},
+    io::Read,
+    str,
+};
 
 use crate::errors::ServerError;
 
 /// HTTP request methods
 #[derive(Debug)]
 pub enum Method {
-    /// Currently the only supported request method by this server
     GET,
+    POST,
 
     /// Represents an request with an unsupported HTTP method
     Unsupported,
@@ -50,12 +54,29 @@ impl Default for Proto {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Request {
     pub proto: Proto,
     pub method: Method,
     pub file: String,
-    // body: Option<Box<dyn Read>>,
+    pub body: Option<Box<dyn Read>>,
+}
+
+impl Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Request")
+            .field("proto", &self.proto)
+            .field("method", &self.method)
+            .field("file", &self.file)
+            .field(
+                "body",
+                &match self.body {
+                    Some(_) => format!("..."),
+                    None => format!("n/a"),
+                },
+            )
+            .finish()
+    }
 }
 
 impl Display for Request {
@@ -65,16 +86,21 @@ impl Display for Request {
 }
 
 pub fn parse_http_request(reader: impl Read) -> Result<Request, ServerError> {
-    let (proto, method, file) = parse_request_line(reader)?;
+    let (proto, method, file) = parse_request_line(&reader)?;
 
     Ok(Request {
         proto,
         method,
         file,
+        body: Some(parse_body(reader)?),
     })
 }
 
-fn parse_request_line(reader: impl Read) -> Result<(Proto, Method, String), ServerError> {
+fn parse_body(reader: impl Read) -> Result<Box<dyn Read>, ServerError> {
+    Ok(Box::new(stringreader::StringReader::new("")))
+}
+
+fn parse_request_line(reader: &impl Read) -> Result<(Proto, Method, String), ServerError> {
     let (line, _) = read_line(reader)?;
     let words = line.split_whitespace().collect::<Vec<_>>();
 
@@ -105,7 +131,7 @@ fn parse_request_line(reader: impl Read) -> Result<(Proto, Method, String), Serv
 
 /// Reads a single line from the reader. Returns the line and how many bytes
 /// were read to obtain that line. Trailing '\r' and '\n' are removed.
-fn read_line(reader: impl Read) -> Result<(String, usize), ServerError> {
+fn read_line(reader: &impl Read) -> Result<(String, usize), ServerError> {
     let mut n = 0;
     let mut s = Vec::with_capacity(1024);
     for b in reader.bytes() {

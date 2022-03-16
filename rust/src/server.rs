@@ -1,5 +1,5 @@
 use std::{
-    fs::File,
+    fs::{self, File},
     io::{BufReader, Read, Write},
     net::{IpAddr, TcpListener, TcpStream},
     path::Path,
@@ -7,7 +7,10 @@ use std::{
 
 use threadpool::ThreadPool;
 
-use crate::{errors::ServerError, parse::parse_http_request};
+use crate::{
+    errors::ServerError,
+    parse::{parse_http_request, Method, Request},
+};
 
 /// 1MB
 pub const BUFSIZE: usize = 1 << 20;
@@ -75,17 +78,106 @@ fn handle_connection(stream: TcpStream, dir: &str) -> Result<(), ServerError> {
     let reader = BufReader::with_capacity(BUFSIZE, &stream);
     let req = parse_http_request(reader)?;
     log::info!("{}", req);
-    match open_file(dir, req.file) {
-        Ok((name, fh)) => write_file(stream, fh, name.as_str()),
-        Err(_) => write_404(stream),
+
+    match Requested::parse(dir, req) {
+        Requested::Dir(file) => write_dir_listing(stream, &file),
+        Requested::File(file) => match open_file(&file) {
+            Ok((name, fh)) => write_file(stream, fh, &name),
+            Err(_) => write_404(stream),
+        },
+        Requested::Upload { filename, body } => accept_file_upload(stream, &filename, body),
+        Requested::None => write_404(stream),
     }
 }
 
-fn open_file(dir: &str, file: String) -> Result<(String, File), ServerError> {
-    let file = file.trim_start_matches("/");
-    let path = Path::new(dir).join(file);
-    let fh = File::open(path.clone()).map_err(ServerError::from)?;
-    log::debug!("Opening file {}", path.to_string_lossy());
+enum Requested {
+    Dir(String),
+    File(String),
+    Upload {
+        filename: String,
+        body: Box<dyn Read>,
+    },
+    None,
+}
+
+impl Requested {
+    fn parse(dir: &str, req: Request) -> Requested {
+        let file = Path::new(dir)
+            .join(req.file.trim_start_matches("/"))
+            .to_string_lossy()
+            .to_string();
+
+        match req.method {
+            Method::GET => {
+                let p = Path::new(&file);
+                if p.is_dir() {
+                    Self::Dir(file)
+                } else if p.is_file() {
+                    Self::File(file)
+                } else {
+                    Self::None
+                }
+            }
+            Method::POST => Self::Upload {
+                filename: file,
+                body: req
+                    .body
+                    .unwrap_or(Box::new(stringreader::StringReader::new(""))),
+            },
+            Method::Unsupported => Self::None,
+        }
+    }
+}
+
+fn accept_file_upload(
+    stream: TcpStream,
+    filename: &str,
+    body: impl Read,
+) -> Result<(), ServerError> {
+    Ok(())
+}
+
+fn write_dir_listing(stream: TcpStream, dir: &str) -> Result<(), ServerError> {
+    use std::fmt::Write;
+
+    log::debug!("Listing directory {}", dir);
+
+    let paths = fs::read_dir(dir).map_err(ServerError::from)?;
+    let mut out = String::new();
+
+    for p in paths {
+        let p = match p {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        let pp = match p.file_type() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        out.write_str(
+            if pp.is_dir() {
+                format!("{}/\n", p.file_name().to_string_lossy())
+            } else {
+                format!("{}\n", p.file_name().to_string_lossy())
+            }
+            .as_str(),
+        )
+        .map_err(ServerError::from)?;
+    }
+    write_response(
+        stream,
+        "200 OK",
+        out.len().try_into().map_err(ServerError::from)?,
+        "text/plain",
+        Some(&mut stringreader::StringReader::new(out.as_str())),
+    )
+}
+
+fn open_file(file: &str) -> Result<(String, File), ServerError> {
+    let fh = File::open(file).map_err(ServerError::from)?;
+    log::debug!("Opening file {}", file);
     Ok((String::from(file), fh))
 }
 
@@ -105,14 +197,15 @@ fn write_response<R: Read>(
     );
 
     let mut out = vec![
-        format!("HTTP/1.1 {}\r\n", status),
-        format!("Content-Length: {}\r\n", body_length),
+        format!("HTTP/1.1 {}", status),
+        format!("Content-Length: {}", body_length),
     ];
 
     if content_type.len() > 0 {
-        out.push(format!("Content-Type: {}\r\n", content_type));
+        out.push(format!("Content-Type: {}", content_type));
     }
 
+    out.push(String::from(""));
     out.push(String::from(""));
     let out = out.join("\r\n");
 
