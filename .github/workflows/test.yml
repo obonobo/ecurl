@@ -37,7 +37,9 @@ jobs:
           go-version: ${{ matrix.go-version }}
       - run: make test
       - run: make
-      - run: make static
+      - run: |
+          make static
+          file httpc | grep 'statically linked'
 
   test-rust:
     name: Run Rust tests
@@ -58,4 +60,6 @@ jobs:
           toolchain: ${{ matrix.rust-version }}
       - run: make test
       - run: make
-      - run: make static
+      - run: |
+          make static
+          file target/x86_64-unknown-linux-gnu/release/httpfs | grep 'statically linked'

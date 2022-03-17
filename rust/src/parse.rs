@@ -134,14 +134,14 @@ fn parse_request_line(reader: &impl Read) -> Result<(Proto, Method, String), Ser
 fn read_line(reader: &impl Read) -> Result<(String, usize), ServerError> {
     let mut n = 0;
     let mut s = Vec::with_capacity(1024);
-    for b in reader.bytes() {
-        let b = b.map_err(ServerError::malformed_request)?;
-        n += 1;
-        if b == b'\n' {
-            break;
-        }
-        s.push(b);
-    }
+    // for b in reader.bytes() {
+    //     let b = b.map_err(ServerError::malformed_request)?;
+    //     n += 1;
+    //     if b == b'\n' {
+    //         break;
+    //     }
+    //     s.push(b);
+    // }
     Ok((
         String::from(
             str::from_utf8(&s)
