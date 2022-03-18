@@ -1,10 +1,16 @@
 use std::{
+    collections::HashMap,
     fmt::{Debug, Display},
-    io::Read,
+    io::{Read, Take},
     str,
 };
 
-use crate::errors::ServerError;
+use crate::{
+    bullshit_scanner::BullshitScanner,
+    errors::{MalformedRequest, ServerError, UnsupportedMethod, UnsupportedProto},
+};
+
+const CONTENT_LENGTH: &str = "Content-Length";
 
 /// HTTP request methods
 #[derive(Debug)]
@@ -20,6 +26,7 @@ impl Method {
     pub fn from(string: &str) -> Self {
         match string.to_lowercase().as_str() {
             "get" => Method::GET,
+            "post" => Method::POST,
             _ => Method::Unsupported,
         }
     }
@@ -54,100 +61,118 @@ impl Default for Proto {
     }
 }
 
-#[derive(Default)]
-pub struct Request {
+pub struct Request<R>
+where
+    R: Read,
+{
     pub proto: Proto,
     pub method: Method,
     pub file: String,
-    pub body: Option<Box<dyn Read>>,
+    pub headers: HashMap<String, String>,
+    pub body: R,
 }
 
-impl Debug for Request {
+impl<R: Read> Debug for Request<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Request")
             .field("proto", &self.proto)
             .field("method", &self.method)
             .field("file", &self.file)
-            .field(
-                "body",
-                &match self.body {
-                    Some(_) => format!("..."),
-                    None => format!("n/a"),
-                },
-            )
+            .field("body", &"...")
             .finish()
     }
 }
 
-impl Display for Request {
+impl<R: Read> Display for Request<R> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-pub fn parse_http_request(reader: impl Read) -> Result<Request, ServerError> {
-    let (proto, method, file) = parse_request_line(&reader)?;
+pub fn parse_http_request(
+    mut scnr: BullshitScanner,
+) -> Result<Request<Take<BullshitScanner>>, ServerError> {
+    let (proto, method, file) = parse_request_line(&mut scnr)?;
+    let headers = parse_headers(&mut scnr)?;
+    let limit = headers
+        .get(CONTENT_LENGTH)
+        .map(|l| l.parse::<u64>().ok().unwrap_or(0))
+        .unwrap_or(0);
 
     Ok(Request {
         proto,
         method,
         file,
-        body: Some(parse_body(reader)?),
+        headers,
+        body: scnr.take(limit),
     })
 }
 
-fn parse_body(reader: impl Read) -> Result<Box<dyn Read>, ServerError> {
-    Ok(Box::new(stringreader::StringReader::new("")))
+fn parse_headers(scnr: &mut BullshitScanner) -> Result<HashMap<String, String>, ServerError> {
+    // Headers we read line-by-line
+    let mut headers = HashMap::with_capacity(64);
+    loop {
+        let line = scnr.next_line().map(|l| l.0).map_err(|_| {
+            ServerError::new().wrap(Box::new(MalformedRequest(Some(String::from(
+                "invalid request headers, headers must end with '\\r\\n'",
+            )))))
+        })?;
+
+        if &line == "" {
+            return Ok(headers);
+        }
+
+        let (left, right) = line.split_once(":").ok_or_else(|| {
+            ServerError::new().wrap(Box::new(MalformedRequest(Some(format!(
+                "failed to parse request header '{}'",
+                line
+            )))))
+        })?;
+
+        headers.insert(String::from(left.trim()), String::from(right.trim()));
+    }
 }
 
-fn parse_request_line(reader: &impl Read) -> Result<(Proto, Method, String), ServerError> {
-    let (line, _) = read_line(reader)?;
-    let words = line.split_whitespace().collect::<Vec<_>>();
+fn parse_request_line(scnr: &mut BullshitScanner) -> Result<(Proto, Method, String), ServerError> {
+    let words = scnr
+        .next_line()
+        .map(|l| l.0)
+        .map_err(|e| ServerError::new().msg(&format!("{}", e)))?
+        .split_whitespace()
+        .map(|s| String::from(s))
+        .collect::<Vec<_>>();
 
-    let map_err =
-        |word| ServerError::malformed_request(format!("no {} found in request line", word));
+    let map_err = |word| {
+        ServerError::wrapping(Box::new(MalformedRequest(Some(format!(
+            "no {} found in request line",
+            word
+        )))))
+    };
 
     Ok((
         (match words.get(2) /* PROTO */ {
-            Some(proto) => match Proto::from(*proto) {
-                Proto::Unsupported => Err(ServerError::unsupported_proto(*proto)),
+            Some(proto) => match Proto::from(proto) {
+                Proto::Unsupported => Err(
+                    ServerError::wrapping(
+                        Box::new(
+                            UnsupportedProto(Some(String::from(proto)))))),
                 proto => Ok(proto),
             },
             None => Err(map_err("protocol")),
         })?,
         (match words.get(0) /* METHOD */ {
-            Some(method) => match Method::from(*method) {
-                Method::Unsupported => Err(ServerError::unsupported_method(*method)),
+            Some(method) => match Method::from(method) {
+                Method::Unsupported => Err(
+                    ServerError::wrapping(
+                        Box::new(
+                            UnsupportedMethod(Some(String::from(method)))))),
                 method => Ok(method),
             },
             None => Err(map_err("method")),
         })?,
         (match words.get(1) /* PATH */ {
-            Some(path) => Ok(String::from(*path)),
+            Some(path) => Ok(String::from(path)),
             None => Err(map_err("path")),
         })?,
-    ))
-}
-
-/// Reads a single line from the reader. Returns the line and how many bytes
-/// were read to obtain that line. Trailing '\r' and '\n' are removed.
-fn read_line(reader: &impl Read) -> Result<(String, usize), ServerError> {
-    let mut n = 0;
-    let mut s = Vec::with_capacity(1024);
-    // for b in reader.bytes() {
-    //     let b = b.map_err(ServerError::malformed_request)?;
-    //     n += 1;
-    //     if b == b'\n' {
-    //         break;
-    //     }
-    //     s.push(b);
-    // }
-    Ok((
-        String::from(
-            str::from_utf8(&s)
-                .map_err(ServerError::malformed_request)?
-                .trim_end_matches("\r"),
-        ),
-        n,
     ))
 }

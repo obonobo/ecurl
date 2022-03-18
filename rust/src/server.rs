@@ -1,6 +1,6 @@
 use std::{
     fs::{self, File},
-    io::{BufReader, Read, Write},
+    io::{Read, Write},
     net::{IpAddr, TcpListener, TcpStream},
     path::Path,
 };
@@ -8,6 +8,7 @@ use std::{
 use threadpool::ThreadPool;
 
 use crate::{
+    bullshit_scanner::BullshitScanner,
     errors::ServerError,
     parse::{parse_http_request, Method, Request},
 };
@@ -49,19 +50,22 @@ impl ServerRunner {
         let addr = self.addr_str();
         log::info!("Starting server on {}", addr);
 
-        let listener = TcpListener::bind(addr).map_err(ServerError::from)?;
+        let to_err = |e| ServerError::wrapping(Box::new(e));
+        let listener = TcpListener::bind(addr).map_err(to_err)?;
         for stream in listener.incoming() {
-            let stream = stream.map_err(ServerError::from)?;
+            let stream = stream.map_err(to_err)?;
             log::debug!(
                 "Connection established with {}",
-                stream.peer_addr().map_err(ServerError::from)?
+                stream.peer_addr().map_err(to_err)?
             );
 
             let dir = self.dir.clone();
             self.threads.execute(move || {
                 match handle_connection(stream, &dir) {
                     Ok(_) => {}
-                    Err(e) => log::info!("{}", e),
+                    Err(e) => {
+                        log::info!("{}", e);
+                    }
                 };
             })
         }
@@ -74,40 +78,43 @@ impl ServerRunner {
     }
 }
 
-fn handle_connection(stream: TcpStream, dir: &str) -> Result<(), ServerError> {
-    let reader = BufReader::with_capacity(BUFSIZE, &stream);
-    let req = parse_http_request(reader)?;
+fn handle_connection(mut stream: TcpStream, dir: &str) -> Result<(), ServerError> {
+    // let mut reader = BufReader::with_capacity(BUFSIZE, stream.as_ref());
+    let scnr = BullshitScanner::new(&mut stream);
+    let mut req = parse_http_request(scnr)?;
     log::info!("{}", req);
 
-    match Requested::parse(dir, req) {
-        Requested::Dir(file) => write_dir_listing(stream, &file),
+    match Requested::parse(dir, &req) {
+        Requested::Dir(file) => write_dir_listing(&mut stream, &file),
         Requested::File(file) => match open_file(&file) {
-            Ok((name, fh)) => write_file(stream, fh, &name),
-            Err(_) => write_404(stream),
+            Ok((name, fh)) => write_file(&mut stream, fh, &name),
+            Err(_) => write_404(&mut stream),
         },
-        Requested::Upload { filename, body } => accept_file_upload(stream, &filename, body),
-        Requested::None => write_404(stream),
+        Requested::Upload(filename) => {
+            accept_file_upload(&filename, &mut req.body)?;
+            write_response::<File>(&mut stream, "201 Created", 0, "", None)
+        }
+        Requested::None => write_404(&mut stream),
     }
 }
 
 enum Requested {
     Dir(String),
     File(String),
-    Upload {
-        filename: String,
-        body: Box<dyn Read>,
-    },
+    Upload(String),
     None,
 }
 
 impl Requested {
-    fn parse(dir: &str, req: Request) -> Requested {
+    fn parse<R: Read>(dir: &str, req: &Request<R>) -> Requested {
         let file = Path::new(dir)
             .join(req.file.trim_start_matches("/"))
             .to_string_lossy()
             .to_string();
 
         match req.method {
+            Method::POST => Self::Upload(file),
+            Method::Unsupported => Self::None,
             Method::GET => {
                 let p = Path::new(&file);
                 if p.is_dir() {
@@ -118,31 +125,24 @@ impl Requested {
                     Self::None
                 }
             }
-            Method::POST => Self::Upload {
-                filename: file,
-                body: req
-                    .body
-                    .unwrap_or(Box::new(stringreader::StringReader::new(""))),
-            },
-            Method::Unsupported => Self::None,
         }
     }
 }
 
-fn accept_file_upload(
-    stream: TcpStream,
-    filename: &str,
-    body: impl Read,
-) -> Result<(), ServerError> {
-    Ok(())
+/// Saves the given file with the provided file name
+fn accept_file_upload<'a>(filename: &str, body: &'a mut dyn Read) -> Result<(), ServerError> {
+    let mut fh = File::create(filename).map_err(|e| ServerError::wrapping(Box::new(e)))?;
+    std::io::copy(body, &mut fh)
+        .map(|_| ())
+        .map_err(|e| ServerError::wrapping(Box::new(e)))
 }
 
-fn write_dir_listing(stream: TcpStream, dir: &str) -> Result<(), ServerError> {
+fn write_dir_listing(stream: &mut TcpStream, dir: &str) -> Result<(), ServerError> {
     use std::fmt::Write;
 
     log::debug!("Listing directory {}", dir);
 
-    let paths = fs::read_dir(dir).map_err(ServerError::from)?;
+    let paths = fs::read_dir(dir).map_err(|e| ServerError::wrapping(Box::new(e)))?;
     let mut out = String::new();
 
     for p in paths {
@@ -164,26 +164,28 @@ fn write_dir_listing(stream: TcpStream, dir: &str) -> Result<(), ServerError> {
             }
             .as_str(),
         )
-        .map_err(ServerError::from)?;
+        .map_err(|e| ServerError::wrapping(Box::new(e)))?;
     }
     write_response(
         stream,
         "200 OK",
-        out.len().try_into().map_err(ServerError::from)?,
+        out.len()
+            .try_into()
+            .map_err(|e| ServerError::wrapping(Box::new(e)))?,
         "text/plain",
         Some(&mut stringreader::StringReader::new(out.as_str())),
     )
 }
 
 fn open_file(file: &str) -> Result<(String, File), ServerError> {
-    let fh = File::open(file).map_err(ServerError::from)?;
+    let fh = File::open(file).map_err(|e| ServerError::wrapping(Box::new(e)))?;
     log::debug!("Opening file {}", file);
     Ok((String::from(file), fh))
 }
 
 /// Writes a response to the stream
 fn write_response<R: Read>(
-    mut stream: TcpStream,
+    stream: &mut TcpStream,
     status: &str,
     body_length: u64,
     content_type: &str,
@@ -209,21 +211,31 @@ fn write_response<R: Read>(
     out.push(String::from(""));
     let out = out.join("\r\n");
 
-    stream.write(out.as_bytes()).map_err(ServerError::from)?;
-    stream.flush().map_err(ServerError::from)?;
+    stream
+        .write(out.as_bytes())
+        .map_err(|e| ServerError::wrapping(Box::new(e)))?;
+
+    stream
+        .flush()
+        .map_err(|e| ServerError::wrapping(Box::new(e)))?;
 
     match body {
         Some(body) => {
-            std::io::copy(body, &mut stream).map_err(ServerError::from)?;
-            stream.flush().map_err(ServerError::from)
+            std::io::copy(body, &mut *stream).map_err(|e| ServerError::wrapping(Box::new(e)))?;
+
+            stream
+                .flush()
+                .map_err(|e| ServerError::wrapping(Box::new(e)))
         }
         None => Ok(()),
     }
 }
 
 /// Writes a file response
-fn write_file(stream: TcpStream, mut fh: File, filename: &str) -> Result<(), ServerError> {
-    let metadata = fh.metadata().map_err(ServerError::from)?;
+fn write_file(stream: &mut TcpStream, mut fh: File, filename: &str) -> Result<(), ServerError> {
+    let metadata = fh
+        .metadata()
+        .map_err(|e| ServerError::wrapping(Box::new(e)))?;
     write_response(
         stream,
         "200 OK",
@@ -234,7 +246,7 @@ fn write_file(stream: TcpStream, mut fh: File, filename: &str) -> Result<(), Ser
 }
 
 /// Writes a NOT FOUND response
-fn write_404(stream: TcpStream) -> Result<(), ServerError> {
+fn write_404(stream: &mut TcpStream) -> Result<(), ServerError> {
     write_response::<File>(stream, "400 NOT FOUND", 0, "", None)
 }
 
