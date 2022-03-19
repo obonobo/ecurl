@@ -54,6 +54,10 @@ impl ServerError {
         let msg = format!("{}: {}", type_name::<Self>(), err);
         Self::new().wrap(err).msg(&msg)
     }
+
+    pub fn wrap_err(err: impl Error + 'static) -> Self {
+        Self::wrapping(Box::new(err))
+    }
 }
 
 // Some simple errors

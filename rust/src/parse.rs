@@ -149,30 +149,30 @@ fn parse_request_line(scnr: &mut BullshitScanner) -> Result<(Proto, Method, Stri
         )))))
     };
 
-    Ok((
-        (match words.get(2) /* PROTO */ {
-            Some(proto) => match Proto::from(proto) {
-                Proto::Unsupported => Err(
-                    ServerError::wrapping(
-                        Box::new(
-                            UnsupportedProto(Some(String::from(proto)))))),
-                proto => Ok(proto),
-            },
-            None => Err(map_err("protocol")),
-        })?,
-        (match words.get(0) /* METHOD */ {
-            Some(method) => match Method::from(method) {
-                Method::Unsupported => Err(
-                    ServerError::wrapping(
-                        Box::new(
-                            UnsupportedMethod(Some(String::from(method)))))),
-                method => Ok(method),
-            },
-            None => Err(map_err("method")),
-        })?,
-        (match words.get(1) /* PATH */ {
-            Some(path) => Ok(String::from(path)),
-            None => Err(map_err("path")),
-        })?,
-    ))
+    let proto = (match words.get(2) {
+        Some(proto) => match Proto::from(proto) {
+            Proto::Unsupported => Err(ServerError::wrapping(Box::new(UnsupportedProto(Some(
+                String::from(proto),
+            ))))),
+            proto => Ok(proto),
+        },
+        None => Err(map_err("protocol")),
+    })?;
+
+    let method = (match words.get(0) {
+        Some(method) => match Method::from(method) {
+            Method::Unsupported => Err(ServerError::wrapping(Box::new(UnsupportedMethod(Some(
+                String::from(method),
+            ))))),
+            method => Ok(method),
+        },
+        None => Err(map_err("method")),
+    })?;
+
+    let path = (match words.get(1) {
+        Some(path) => Ok(String::from(path)),
+        None => Err(map_err("path")),
+    })?;
+
+    Ok((proto, method, path))
 }

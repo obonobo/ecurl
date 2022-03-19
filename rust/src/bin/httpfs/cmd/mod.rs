@@ -1,6 +1,6 @@
 mod cli;
-mod config;
-mod exit;
-mod utils;
+pub mod config;
+pub mod exit;
+pub mod utils;
 
 pub use cli::*;
