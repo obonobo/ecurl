@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::{Read, Write},
     net::{IpAddr, TcpListener, TcpStream},
@@ -59,9 +60,14 @@ impl ServerRunner {
                 Err(_) => continue,
             };
 
-            if let Some(addr) = stream.peer_addr().ok() {
-                log::debug!("Connection established with {}", addr);
-            }
+            log::debug!(
+                "Connection established with {}",
+                stream
+                    .peer_addr()
+                    .ok()
+                    .map(|addr| format!("{}", addr))
+                    .unwrap_or(String::from("..."))
+            );
 
             let dir = self.dir.clone();
             self.threads.execute(move || {
@@ -217,28 +223,29 @@ fn open_file(file: &str) -> Result<(String, File), ServerError> {
     Ok((String::from(file), fh))
 }
 
-/// Writes a response to the stream
-fn write_response<R: Read>(
+fn write_response_with_headers(
     stream: &mut TcpStream,
     status: &str,
     body_length: u64,
-    content_type: &str,
-    body: Option<&mut R>,
+    headers: Option<HashMap<&str, &str>>,
+    body: Option<&mut impl Read>,
 ) -> Result<(), ServerError> {
+    let headers = headers.unwrap_or_else(HashMap::new);
     log::debug!(
-        "Writing response {}, length {}, media type {}",
+        "Writing response {}, length {}, headers {:?}",
         status,
         body_length,
-        content_type
+        headers
     );
 
-    let mut out = vec![
-        format!("HTTP/1.1 {}", status),
-        format!("Content-Length: {}", body_length),
-    ];
+    let mut out = vec![format!("HTTP/1.1 {}", status)];
 
-    if content_type.len() > 0 {
-        out.push(format!("Content-Type: {}", content_type));
+    if !headers.contains_key("Content-Length") {
+        out.push(format!("Content-Length: {}", body_length));
+    }
+
+    for (key, value) in headers.iter() {
+        out.push(format!("{}: {}", key, value));
     }
 
     out.push(String::from(""));
@@ -257,17 +264,43 @@ fn write_response<R: Read>(
     }
 }
 
+/// Writes a response to the stream
+fn write_response<R: Read>(
+    stream: &mut TcpStream,
+    status: &str,
+    body_length: u64,
+    content_type: &str,
+    body: Option<&mut R>,
+) -> Result<(), ServerError> {
+    write_response_with_headers(
+        stream,
+        status,
+        body_length,
+        Some(HashMap::from([("Content-Type", content_type)])),
+        body,
+    )
+}
+
 fn wrap<E: std::error::Error + 'static>(err: E) -> ServerError {
     ServerError::wrap_err(err)
 }
 
 /// Writes a file response
 fn write_file(stream: &mut TcpStream, mut fh: File, filename: &str) -> Result<(), ServerError> {
-    write_response(
+    write_response_with_headers(
         stream,
         "200 OK",
         fh.metadata().map_err(wrap)?.len(),
-        parse_mimetype(filename).as_str(),
+        Some(HashMap::from([
+            ("Content-Type", parse_mimetype(filename).as_str()),
+            (
+                "Content-Disposition",
+                &format!(
+                    r#"attachment; filename="{}""#,
+                    filename.split("/").last().unwrap_or(filename)
+                ),
+            ),
+        ])),
         Some(&mut fh),
     )
 }
@@ -337,22 +370,26 @@ fn write_not_allowed(stream: &mut TcpStream, filename: &str, dir: &str) -> Resul
 
 /// Parses the mime type from a non-exhaustive list
 fn parse_mimetype(filename: &str) -> String {
-    match filename.split(".").last() {
-        Some(x) => match x {
-            "png" => mime::IMAGE_PNG,
-            "jpg" => mime::IMAGE_JPEG,
-            "txt" => mime::TEXT_PLAIN,
-            "js" => mime::APPLICATION_JAVASCRIPT,
-            "css" => mime::TEXT_CSS,
-            "xml" => mime::TEXT_XML,
-            "json" => mime::APPLICATION_JSON,
-            "html" => mime::TEXT_HTML,
-            "pdf" => mime::APPLICATION_PDF,
-
-            // ... and so on, this is where you'd fill out more info ideally
-            _ => mime::APPLICATION_OCTET_STREAM,
+    match filename.split("/").last().unwrap_or(filename) {
+        "Makefile" => mime::TEXT_PLAIN,
+        other => match other.split(".").last() {
+            Some(x) => match x {
+                "png" => mime::IMAGE_PNG,
+                "jpg" => mime::IMAGE_JPEG,
+                "txt" => mime::TEXT_PLAIN,
+                "js" => mime::APPLICATION_JAVASCRIPT,
+                "css" => mime::TEXT_CSS,
+                "xml" => mime::TEXT_XML,
+                "json" => mime::APPLICATION_JSON,
+                "html" => mime::TEXT_HTML,
+                "pdf" => mime::APPLICATION_PDF,
+                "gitignore" => mime::TEXT_PLAIN,
+                "lock" => mime::TEXT_PLAIN,
+                "toml" => return String::from("application/toml"),
+                _ => mime::APPLICATION_OCTET_STREAM,
+            },
+            None => mime::APPLICATION_OCTET_STREAM,
         },
-        None => mime::APPLICATION_OCTET_STREAM,
     }
     .to_string()
 }
