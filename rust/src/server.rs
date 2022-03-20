@@ -4,6 +4,9 @@ use std::{
     io::{Read, Write},
     net::{IpAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
+    sync::{Arc, Barrier, Mutex},
+    thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use threadpool::ThreadPool;
@@ -32,9 +35,63 @@ impl Server {
             addr: self.addr,
             dir: self.dir,
             port: self.port,
-            threads: ThreadPool::new(self.n_workers),
+            threads: Arc::new(Mutex::new(ThreadPool::new(self.n_workers))),
         }
         .serve()
+    }
+}
+
+/// Represents a running [Server] that can be shutdown
+#[derive(Debug)]
+pub struct Handle {
+    /// The [ServerRunner] thread will poll this shared variable in between
+    /// accepting connections. If the value contained within the [mutex](Mutex)
+    /// is true, then the server thread will stop accepting requests.
+    exit: Arc<Mutex<bool>>,
+    done: Arc<Barrier>,
+
+    main: Option<JoinHandle<()>>,
+}
+
+impl Handle {
+    pub fn new() -> Self {
+        Self {
+            exit: Arc::new(Mutex::new(false)),
+            done: Arc::new(Barrier::new(2)),
+            main: None,
+        }
+    }
+
+    /// Gracefully shutdown the server
+    pub fn shutdown(&mut self) {
+        {
+            let mut exit = self.exit.lock().unwrap();
+            *exit = true;
+        }
+        self.done.wait();
+    }
+
+    /// Waits on the main thread contained within this handle
+    pub fn join(self) {
+        if let Some(main) = self.main {
+            main.join().unwrap();
+        }
+    }
+
+    fn set_main(&mut self, handle: JoinHandle<()>) {
+        self.main = Some(handle);
+    }
+}
+
+impl Clone for Handle {
+    /// Note: this does not clone the main thread of the handle, which is not
+    /// clonable. Only the original handle may control its main thread.
+    fn clone(&self) -> Self {
+        Self {
+            exit: self.exit.clone(),
+            done: self.done.clone(),
+            main: None,
+        }
     }
 }
 
@@ -43,45 +100,68 @@ struct ServerRunner {
     addr: IpAddr,
     port: i32,
     dir: String,
-    threads: ThreadPool,
+    threads: Arc<Mutex<ThreadPool>>,
 }
 
-pub struct Handle {}
-
 impl ServerRunner {
-    pub fn serve(&self) -> Result<Handle, ServerError> {
+    fn serve(&self) -> Result<Handle, ServerError> {
         let addr = self.addr_str();
         log::info!("Starting server on {}", addr);
 
         let listener = TcpListener::bind(addr).map_err(wrap)?;
-        for stream in listener.incoming() {
-            let mut stream = match stream {
-                Ok(stream) => stream,
-                Err(_) => continue,
-            };
+        listener
+            .set_nonblocking(true)
+            .map_err(ServerError::wrap_err)?;
 
-            log::debug!(
-                "Connection established with {}",
-                stream
-                    .peer_addr()
-                    .ok()
-                    .map(|addr| format!("{}", addr))
-                    .unwrap_or(String::from("..."))
-            );
+        let mut handle = Handle::new();
 
-            let dir = self.dir.clone();
-            self.threads.execute(move || {
-                match handle_connection(&mut stream, &dir) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        log::info!("{}", e);
-                        write_500(&mut stream, &format!("{}", e));
+        // Spin up a request handler loop in a new thread
+        let (handlec, threadsc, dirc) = (handle.clone(), self.threads.clone(), self.dir.clone());
+        let main_handle = thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = match stream {
+                    Ok(stream) => stream,
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // Poll the handle
+                        {
+                            if *handlec.exit.lock().unwrap() {
+                                break;
+                            }
+                        }
+                        thread::sleep(Duration::from_millis(1));
+                        continue;
                     }
+                    Err(_) => break,
                 };
-            })
-        }
 
-        Ok(Handle {})
+                log::debug!(
+                    "Connection established with {}",
+                    stream
+                        .peer_addr()
+                        .ok()
+                        .map(|addr| format!("{}", addr))
+                        .unwrap_or(String::from("..."))
+                );
+
+                let dir = dirc.clone();
+                threadsc.lock().unwrap().execute(move || {
+                    match handle_connection(&mut stream, &dir) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::info!("{}", e);
+                            write_500(&mut stream, &format!("{}", e));
+                        }
+                    };
+                })
+            }
+
+            // Join the request threads
+            threadsc.lock().unwrap().join();
+            handlec.done.wait();
+        });
+
+        handle.set_main(main_handle);
+        Ok(handle)
     }
 
     fn addr_str(&self) -> String {
@@ -89,6 +169,7 @@ impl ServerRunner {
     }
 }
 
+/// Routes requests to the appropriate handler
 fn handle_connection(stream: &mut TcpStream, dir: &str) -> Result<(), ServerError> {
     // let mut reader = BufReader::with_capacity(BUFSIZE, stream.as_ref());
     let scnr = BullshitScanner::new(stream);

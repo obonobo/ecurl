@@ -7,6 +7,8 @@ use std::{
 
 use clap::Parser;
 
+use crate::cmd::exit::EXIT_NOT_OKAY;
+
 pub const LOCALHOST: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
 #[derive(Debug)]
@@ -42,6 +44,13 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn from_args(args: impl Iterator<Item = String>) -> Result<Config, i32> {
+        Config::try_parse_from(args)
+            .map_err(|e| ConfigError(format!("{}", e))) // We don't actually care about the error
+            .and_then(Self::verify)
+            .map_err(|_| EXIT_NOT_OKAY)
+    }
+
     pub fn verify(self) -> Result<Self, ConfigError> {
         if !Self::dir_exists(self.dir.as_str()) {
             Err(ConfigError(String::from("ConfigError")))
