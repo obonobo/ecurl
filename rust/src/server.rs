@@ -14,13 +14,12 @@ use threadpool::ThreadPool;
 use crate::{
     bullshit_scanner::BullshitScanner,
     errors::ServerError,
+    html::template,
     parse::{parse_http_request, Method, Request},
 };
 
 /// 1MB
 pub const BUFSIZE: usize = 1 << 20;
-
-const BAD_NUMERICAL_CONVERSION: &str = "bad numerical conversion";
 
 pub struct Server {
     pub addr: IpAddr,
@@ -49,7 +48,6 @@ pub struct Handle {
     /// is true, then the server thread will stop accepting requests.
     exit: Arc<Mutex<bool>>,
     done: Arc<Barrier>,
-
     main: Option<JoinHandle<()>>,
 }
 
@@ -95,6 +93,9 @@ impl Clone for Handle {
     }
 }
 
+/// The [ServerRunner] is the object that actually initiates the request
+/// handling thread. It is mod-private, the only way to instantiate it is
+/// through the [Server] public struct.
 #[derive(Debug)]
 struct ServerRunner {
     addr: IpAddr,
@@ -117,7 +118,7 @@ impl ServerRunner {
 
         // Spin up a request handler loop in a new thread
         let (handlec, threadsc, dirc) = (handle.clone(), self.threads.clone(), self.dir.clone());
-        let main_handle = thread::spawn(move || {
+        handle.set_main(thread::spawn(move || {
             for stream in listener.incoming() {
                 let mut stream = match stream {
                     Ok(stream) => stream,
@@ -158,9 +159,7 @@ impl ServerRunner {
             // Join the request threads
             threadsc.lock().unwrap().join();
             handlec.done.wait();
-        });
-
-        handle.set_main(main_handle);
+        }));
         Ok(handle)
     }
 
@@ -203,8 +202,16 @@ enum Requested {
 
 impl Requested {
     fn parse<R: Read>(dir: &str, req: &Request<R>) -> Requested {
-        let file = Path::new(dir)
-            .join(req.file.trim_start_matches("/"))
+        let dir = Path::new(dir)
+            .canonicalize()
+            .ok()
+            .unwrap_or_else(|| PathBuf::from(dir));
+
+        let file = dir.join(req.file.trim_start_matches("/"));
+        let file = file
+            .canonicalize()
+            .ok()
+            .unwrap_or(file)
             .to_string_lossy()
             .to_string();
 
@@ -212,7 +219,7 @@ impl Requested {
 
         // Check if the user is allowed to access this file (for either reading
         // or writing)
-        if Self::file_not_allowed(&file, &dir) {
+        if Self::file_not_allowed(&file, &dir.to_string_lossy()) {
             return Self::NotAllowed(file);
         }
 
@@ -235,20 +242,21 @@ impl Requested {
     /// Returns `true` if this file is located outside the dir being served,
     /// `false` otherwise
     fn file_not_allowed(file: &str, dir: &str) -> bool {
-        let path_buf = |file| {
-            Path::new(file)
-                .canonicalize()
-                .ok()
-                .unwrap_or_else(|| PathBuf::from(file))
-        };
-
-        let dir = path_buf(dir);
-        let file = path_buf(file);
-
-        log::debug!("Security - checking if file is within served folder");
-        log::debug!("Dir: {}", dir.to_string_lossy());
-        log::debug!("File: {}", file.to_string_lossy());
-
+        let mut collect = Vec::with_capacity(64);
+        for segment in file.split("/") {
+            match segment {
+                "" => continue,
+                "/" => continue,
+                "." => continue,
+                ".." => {
+                    if collect.len() > 1 {
+                        collect.pop();
+                    }
+                }
+                segment => collect.push(segment),
+            }
+        }
+        let file = format!("/{}", collect.join("/"));
         !file.starts_with(dir)
     }
 }
@@ -260,41 +268,30 @@ fn accept_file_upload<'a>(filename: &str, body: &'a mut dyn Read) -> Result<(), 
 }
 
 fn write_dir_listing(stream: &mut TcpStream, dir: &str) -> Result<(), ServerError> {
-    use std::fmt::Write;
-
     log::debug!("Listing directory {}", dir);
 
-    let paths = fs::read_dir(dir).map_err(wrap)?;
-    let mut out = String::new();
-
-    for p in paths {
-        let p = match p {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-
-        let pp = match p.file_type() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-
-        out.write_str(
-            if pp.is_dir() {
-                format!("{}/\n", p.file_name().to_string_lossy())
-            } else {
-                format!("{}\n", p.file_name().to_string_lossy())
-            }
-            .as_str(),
-        )
-        .map_err(wrap)?;
-    }
+    // Gather a list of files and inject it into the template
+    let template = template(
+        fs::read_dir(dir)
+            .map_err(wrap)?
+            .flat_map(Result::ok)
+            .map(|file| (file.file_type(), file))
+            .filter(|(ft, _)| ft.as_ref().map(|t| !t.is_symlink()).unwrap_or(false))
+            .map(|(ft, f)| {
+                (
+                    ft.map(|x| x.is_dir()).unwrap_or(false),
+                    String::from(f.file_name().to_string_lossy()),
+                )
+            })
+            .map(|(ft, f)| if ft { format!("{}/", f) } else { f }),
+    );
 
     write_response(
         stream,
         "200 OK",
-        out.len().try_into().map_err(wrap)?,
-        "text/plain",
-        Some(&mut stringreader::StringReader::new(out.as_str())),
+        template.len().try_into().map_err(wrap)?,
+        "text/html",
+        Some(&mut stringreader::StringReader::new(template.as_str())),
     )
 }
 
@@ -401,7 +398,7 @@ fn write_500(stream: &mut TcpStream, msg: &str) {
 /// Writes a '404 Not Found' response
 fn write_404(stream: &mut TcpStream, filename: &str, dir: &str) -> Result<(), ServerError> {
     let body = format!(
-        "File '{}' could not be found on the server (directory being served is {})",
+        "File '{}' could not be found on the server (directory being served is {})\n",
         filename, dir
     );
 
@@ -410,7 +407,7 @@ fn write_404(stream: &mut TcpStream, filename: &str, dir: &str) -> Result<(), Se
         "404 Not Found",
         body.len().try_into().map_err(|e| {
             ServerError::new()
-                .msg(BAD_NUMERICAL_CONVERSION)
+                .msg("bad numerical conversion")
                 .wrap(Box::new(e))
         })?,
         "text/plain",
@@ -441,7 +438,7 @@ fn write_not_allowed(stream: &mut TcpStream, filename: &str, dir: &str) -> Resul
         "403 Forbidden",
         body.len().try_into().map_err(|e| {
             ServerError::new()
-                .msg(BAD_NUMERICAL_CONVERSION)
+                .msg("bad numerical conversion")
                 .wrap(Box::new(e))
         })?,
         "text/plain",
@@ -467,7 +464,7 @@ fn parse_mimetype(filename: &str) -> String {
                 "gitignore" => mime::TEXT_PLAIN,
                 "lock" => mime::TEXT_PLAIN,
                 "toml" => return String::from("application/toml"),
-                _ => mime::APPLICATION_OCTET_STREAM,
+                _ => mime::TEXT_PLAIN,
             },
             None => mime::APPLICATION_OCTET_STREAM,
         },

@@ -52,10 +52,10 @@ func postCmd(config *Config) (usage func(), action func(args []string) int) {
 	postCmd := flag.NewFlagSet(GET, flag.ExitOnError)
 	postCmd.Usage = func() {
 		fmt.Printf(
-			GetUsage,
+			PostUsage,
 			config.Command,
-			GET,
-			strings.ToUpper(GET[:1])+GET[1:])
+			POST,
+			strings.ToUpper(POST[:1])+POST[1:])
 	}
 
 	// Verbose
