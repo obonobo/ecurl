@@ -1,15 +1,8 @@
-use std::{
-    error::Error,
-    fmt::Display,
-    net::{IpAddr, Ipv4Addr},
-    path::Path,
-};
+use std::{error::Error, fmt::Display, path::Path};
 
 use clap::Parser;
 
 use crate::cmd::exit::EXIT_NOT_OKAY;
-
-pub const LOCALHOST: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 
 #[derive(Debug)]
 pub struct ConfigError(pub String);
@@ -40,7 +33,7 @@ pub struct Config {
 
     /// Specifies the port number that the server will listen and serve at.
     #[clap(short, long, default_value_t = 8080)]
-    pub port: i32,
+    pub port: u32,
 }
 
 impl Config {

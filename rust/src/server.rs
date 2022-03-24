@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     io::{Read, Write},
-    net::{IpAddr, TcpListener, TcpStream},
+    net::{IpAddr, Ipv4Addr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     sync::{Arc, Barrier, Mutex},
     thread::{self, JoinHandle},
@@ -23,12 +23,17 @@ pub const BUFSIZE: usize = 1 << 20;
 
 pub struct Server {
     pub addr: IpAddr,
-    pub port: i32,
+    pub port: u32,
     pub dir: String,
     pub n_workers: usize,
 }
 
 impl Server {
+    pub const LOCALHOST: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+    pub const DEFAULT_PORT: u32 = 8080;
+    pub const DEFAULT_DIR: &'static str = "./";
+    pub const DEFAULT_NUM_THREADS: usize = 4;
+
     pub fn serve(self) -> Result<Handle, ServerError> {
         ServerRunner {
             addr: self.addr,
@@ -37,6 +42,17 @@ impl Server {
             threads: Arc::new(Mutex::new(ThreadPool::new(self.n_workers))),
         }
         .serve()
+    }
+}
+
+impl Default for Server {
+    fn default() -> Self {
+        Self {
+            addr: Self::LOCALHOST,
+            port: Self::DEFAULT_PORT,
+            dir: String::from(Self::DEFAULT_DIR),
+            n_workers: Self::DEFAULT_NUM_THREADS,
+        }
     }
 }
 
@@ -99,7 +115,7 @@ impl Clone for Handle {
 #[derive(Debug)]
 struct ServerRunner {
     addr: IpAddr,
-    port: i32,
+    port: u32,
     dir: String,
     threads: Arc<Mutex<ThreadPool>>,
 }
@@ -245,9 +261,7 @@ impl Requested {
         let mut collect = Vec::with_capacity(64);
         for segment in file.split("/") {
             match segment {
-                "" => continue,
-                "/" => continue,
-                "." => continue,
+                "" | "." => continue,
                 ".." => {
                     if collect.len() > 1 {
                         collect.pop();

@@ -3,7 +3,7 @@ use std::time::Instant;
 use httpfs::server::{Handle, Server};
 
 use crate::cmd::{
-    config::{Config, LOCALHOST},
+    config::Config,
     exit::{EXIT_NOT_OKAY, EXIT_OKAY},
     utils,
 };
@@ -40,10 +40,10 @@ pub fn run(args: impl Iterator<Item = String>) -> i32 {
 
 fn server(cfg: Config) -> Server {
     Server {
-        addr: LOCALHOST,
         dir: cfg.dir,
         port: cfg.port,
         n_workers: num_cpus::get(),
+        ..Default::default()
     }
 }
 
