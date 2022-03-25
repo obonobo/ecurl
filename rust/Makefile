@@ -25,6 +25,7 @@ static: download
 
 clean:
 	cargo clean
+	rm -rf TEMP_*
 
 test:
 	cargo test
