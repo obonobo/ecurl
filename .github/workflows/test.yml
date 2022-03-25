@@ -58,6 +58,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           toolchain: ${{ matrix.rust-version }}
+      - uses: Swatinem/rust-cache@v1
       - run: make test
       - run: make
       - run: |
