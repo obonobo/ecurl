@@ -39,15 +39,23 @@ impl ServerError {
     }
 
     pub fn malformed_request() -> Self {
-        Self::wrapping(Box::new(MalformedRequest(None)))
+        Self::wrap_err(MalformedRequestError(None))
     }
 
     pub fn unsupported_proto() -> Self {
-        Self::wrapping(Box::new(UnsupportedProto(None)))
+        Self::wrap_err(UnsupportedProtoError(None))
     }
 
     pub fn unsupported_method() -> Self {
-        Self::wrapping(Box::new(UnsupportedMethod(None)))
+        Self::wrap_err(UnsupportedMethodError(None))
+    }
+
+    pub fn writing_to_directory() -> Self {
+        Self::wrap_err(WritingToDirectoryError(None))
+    }
+
+    pub fn writing_to_symlink() -> Self {
+        Self::wrap_err(WritingToSymlinkError(None))
     }
 
     pub fn wrapping(err: Box<dyn Error>) -> Self {
@@ -60,11 +68,6 @@ impl ServerError {
     }
 }
 
-// Some simple errors
-super::basic_error!(MalformedRequest, "Malformed request");
-super::basic_error!(UnsupportedProto, "Unsupported protocol");
-super::basic_error!(UnsupportedMethod, "Unsupported HTTP method");
-
 impl Display for ServerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.msg)
@@ -75,6 +78,13 @@ impl Error for ServerError {
         Some(self.src.as_ref()?.as_ref())
     }
 }
+
+// Some simple errors
+super::basic_error!(MalformedRequestError, "Malformed request");
+super::basic_error!(UnsupportedProtoError, "Unsupported protocol");
+super::basic_error!(UnsupportedMethodError, "Unsupported HTTP method");
+super::basic_error!(WritingToDirectoryError, "File exists and is a directory");
+super::basic_error!(WritingToSymlinkError, "File exists and is a symlink");
 
 #[derive(Debug)]
 pub struct HttpParseError(pub String);

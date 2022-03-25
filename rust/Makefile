@@ -15,6 +15,7 @@ download:
 
 build: download
 	$(buildcmd)
+	cp target/release/httpfs ./
 
 # Build statically linked against glibc
 static: download

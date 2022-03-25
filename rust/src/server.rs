@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::{Read, Write},
     net::{IpAddr, Ipv4Addr, TcpListener, TcpStream},
     path::{Path, PathBuf},
@@ -277,7 +277,19 @@ impl Requested {
 
 /// Saves the given file with the provided file name
 fn accept_file_upload<'a>(filename: &str, body: &'a mut dyn Read) -> Result<(), ServerError> {
-    let mut fh = File::create(filename).map_err(wrap)?;
+    let path = Path::new(filename);
+    if path.is_dir() {
+        return Err(ServerError::writing_to_directory());
+    } else if path.is_symlink() {
+        return Err(ServerError::writing_to_symlink());
+    }
+
+    let mut fh = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(filename)
+        .map_err(wrap)?;
+
     std::io::copy(body, &mut fh).map(|_| ()).map_err(wrap)
 }
 

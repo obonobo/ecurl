@@ -2,7 +2,6 @@
 /// This module contains the webpage stuff for the dir listing of the file
 /// server
 ///
-///
 
 /// Template generation - insert a list of file names as links into our html doc
 pub fn template(files: impl IntoIterator<Item = String>) -> String {

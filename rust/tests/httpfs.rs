@@ -2,8 +2,15 @@
 pub mod test_utils;
 
 use crate::test_utils::*;
+use core::panic;
 use httpfs::bullshit_scanner::BullshitScanner;
-use std::{io::Write, net::TcpStream, sync::Mutex};
+use std::{
+    io::Write,
+    net::TcpStream,
+    sync::{mpsc, Arc, Mutex},
+    thread,
+};
+use test_utils::better_ureq::*;
 
 // Global server factory for running tests in parallel
 lazy_static::lazy_static! {
@@ -94,4 +101,85 @@ fn test_forbidden() {
         .join("\n");
 
     assert!(body.contains("hello.txt' is located outside the directory that is being served"))
+}
+
+/// Tests multiple clients reading the same file
+#[test]
+fn test_multiple_clients_get_same_file() {
+    let server = server();
+    let contents = "Hello world\n";
+    let file = TempFile::new("hello.txt", contents).unwrap();
+    let n = 25;
+    let mut threads = Vec::with_capacity(n);
+    let (taskout, taskin) = mpsc::channel::<Result<(u16, String), ureq::Error>>();
+    let addr = server.file_addr(&file.name);
+
+    // Spawn some clients
+    for _ in 0..n {
+        let (out, addr) = (taskout.clone(), addr.clone());
+        threads.push(thread::spawn(move || {
+            out.send(ureq_get_errors_are_ok(&addr)).unwrap()
+        }));
+    }
+
+    // Assert client results
+    threads.into_iter().for_each(|t| t.join().unwrap());
+    for (i, res) in taskin.iter().take(n).enumerate() {
+        match res {
+            Ok((code, body)) => {
+                assert_eq!(200, code);
+                assert_eq!(contents, body);
+            }
+            Err(e) => panic!("Got an error on request {}: {}", i, e),
+        }
+    }
+}
+
+/// Tests multiple clients reading and writing the same file
+#[test]
+fn test_multiple_clients_reading_and_writing_same_file() {
+    let handle = server();
+    let contents = "Hello world\n";
+    let file = TempFile::new("hello.txt", contents).unwrap();
+    let n = 25;
+    let mut threads = Vec::with_capacity(n);
+    let (taskout, taskin) = mpsc::channel::<Result<(u16, String), ureq::Error>>();
+    let addr = handle.file_addr(&file.name);
+
+    // The task function will be different for each thread. We will alternate
+    // between one thread reading, one thread writing, one reading, one writing,
+    // etc.
+    let mut read = 0;
+    let mut task =
+        || -> Arc<dyn Fn(&str, &str) -> Result<(u16, String), ureq::Error> + Send + Sync> {
+            read += 1;
+            Arc::new(if read % 2 == 0 {
+                |path, _| ureq_get_errors_are_ok(path)
+            } else {
+                |path, body| ureq_post_errors_are_ok(path, body)
+            })
+        };
+
+    // Spawn the clients, some will read, some will write
+    for i in 0..n {
+        let (out, path, task) = (taskout.clone(), addr.clone(), task());
+        let body = format!("{}From thread {}", contents, i);
+        threads.push(thread::spawn(move || {
+            out.send(task(&path, &body)).unwrap();
+        }))
+    }
+
+    // Assert client results
+    threads.into_iter().for_each(|t| t.join().unwrap());
+    let results = taskin.iter().take(n).collect::<Vec<_>>();
+    for (i, res) in results.iter().enumerate() {
+        match res {
+            Ok((code, body)) => match code {
+                200 => assert!(body.contains(contents), "Body: {}", body),
+                201 => assert_eq!("", body),
+                code => panic!("Expected status 200 or 201 but got {}", code),
+            },
+            Err(e) => panic!("Got an error on request {}: {}", i, e),
+        }
+    }
 }

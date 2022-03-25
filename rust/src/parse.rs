@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     bullshit_scanner::BullshitScanner,
-    errors::{MalformedRequest, ServerError, UnsupportedMethod, UnsupportedProto},
+    errors::{MalformedRequestError, ServerError, UnsupportedMethodError, UnsupportedProtoError},
 };
 
 const CONTENT_LENGTH: &str = "Content-Length";
@@ -113,7 +113,7 @@ fn parse_headers(scnr: &mut BullshitScanner) -> Result<HashMap<String, String>, 
     let mut headers = HashMap::with_capacity(64);
     loop {
         let line = scnr.next_line().map(|l| l.0).map_err(|_| {
-            ServerError::new().wrap(Box::new(MalformedRequest(Some(String::from(
+            ServerError::new().wrap(Box::new(MalformedRequestError(Some(String::from(
                 "invalid request headers, headers must end with '\\r\\n'",
             )))))
         })?;
@@ -123,7 +123,7 @@ fn parse_headers(scnr: &mut BullshitScanner) -> Result<HashMap<String, String>, 
         }
 
         let (left, right) = line.split_once(":").ok_or_else(|| {
-            ServerError::new().wrap(Box::new(MalformedRequest(Some(format!(
+            ServerError::new().wrap(Box::new(MalformedRequestError(Some(format!(
                 "failed to parse request header '{}'",
                 line
             )))))
@@ -143,7 +143,7 @@ fn parse_request_line(scnr: &mut BullshitScanner) -> Result<(Proto, Method, Stri
         .collect::<Vec<_>>();
 
     let map_err = |word| {
-        ServerError::wrapping(Box::new(MalformedRequest(Some(format!(
+        ServerError::wrapping(Box::new(MalformedRequestError(Some(format!(
             "no {} found in request line",
             word
         )))))
@@ -151,7 +151,7 @@ fn parse_request_line(scnr: &mut BullshitScanner) -> Result<(Proto, Method, Stri
 
     let proto = (match words.get(2) {
         Some(proto) => match Proto::from(proto) {
-            Proto::Unsupported => Err(ServerError::wrapping(Box::new(UnsupportedProto(Some(
+            Proto::Unsupported => Err(ServerError::wrapping(Box::new(UnsupportedProtoError(Some(
                 String::from(proto),
             ))))),
             proto => Ok(proto),
@@ -161,7 +161,7 @@ fn parse_request_line(scnr: &mut BullshitScanner) -> Result<(Proto, Method, Stri
 
     let method = (match words.get(0) {
         Some(method) => match Method::from(method) {
-            Method::Unsupported => Err(ServerError::wrapping(Box::new(UnsupportedMethod(Some(
+            Method::Unsupported => Err(ServerError::wrapping(Box::new(UnsupportedMethodError(Some(
                 String::from(method),
             ))))),
             method => Ok(method),

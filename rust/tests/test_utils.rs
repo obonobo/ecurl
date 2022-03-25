@@ -147,6 +147,29 @@ impl Default for AddressCountingServerFactory {
     }
 }
 
+pub mod better_ureq {
+    /// Calls ureq GET but treats [ureq::Error::Status] errors as still being valid.
+    /// Returns a tuple of status code and response body string.
+    pub fn ureq_get_errors_are_ok(path: &str) -> Result<(u16, String), ureq::Error> {
+        ureq_errors_are_ok(|| ureq::get(path).call())
+    }
+
+    pub fn ureq_post_errors_are_ok(path: &str, body: &str) -> Result<(u16, String), ureq::Error> {
+        ureq_errors_are_ok(|| ureq::post(path).send(body.as_bytes()))
+    }
+
+    fn ureq_errors_are_ok(
+        callable: impl FnOnce() -> Result<ureq::Response, ureq::Error>,
+    ) -> Result<(u16, String), ureq::Error> {
+        match callable() {
+            Ok(response) | Err(ureq::Error::Status(_, response)) => Ok((
+                response.status(),
+                response.into_string().unwrap_or(String::new()),
+            )),
+            Err(e) => Err(e),
+        }
+    }
+}
 pub mod assertions {
     use ureq::{Error::Status, Request};
 
