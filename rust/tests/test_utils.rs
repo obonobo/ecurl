@@ -52,6 +52,13 @@ impl Drop for TempFile {
     }
 }
 
+impl Default for TempFile {
+    /// Creates an empty temp file
+    fn default() -> Self {
+        Self::new_or_panic("file.tmp", "")
+    }
+}
+
 /// A wrapper around the server handle. Implements a [Drop::drop] method that
 /// calls [Handle::shutdown]. Warning: [Handle::shutdown] may block for a short
 /// time while it waits for the server to stop. That's the reason why this is
@@ -81,8 +88,7 @@ impl ServerDropper {
         Self::new(cfg).unwrap()
     }
 
-    /// Returns a formatted string containing the address of the this server.
-    /// Use only for testing
+    /// Returns a formatted string containing the address of this server
     pub fn addr(&self) -> String {
         format!("http://{}:{}", self.cfg.0, self.cfg.1)
     }
@@ -148,21 +154,23 @@ impl Default for AddressCountingServerFactory {
 }
 
 pub mod better_ureq {
+    use ureq::{get, post, Error};
+
     /// Calls ureq GET but treats [ureq::Error::Status] errors as still being valid.
     /// Returns a tuple of status code and response body string.
-    pub fn ureq_get_errors_are_ok(path: &str) -> Result<(u16, String), ureq::Error> {
-        ureq_errors_are_ok(|| ureq::get(path).call())
+    pub fn ureq_get_errors_are_ok(path: &str) -> Result<(u16, String), Error> {
+        ureq_errors_are_ok(|| get(path).call())
     }
 
-    pub fn ureq_post_errors_are_ok(path: &str, body: &str) -> Result<(u16, String), ureq::Error> {
-        ureq_errors_are_ok(|| ureq::post(path).send(body.as_bytes()))
+    pub fn ureq_post_errors_are_ok(path: &str, body: &str) -> Result<(u16, String), Error> {
+        ureq_errors_are_ok(|| post(path).send_string(body))
     }
 
     fn ureq_errors_are_ok(
-        callable: impl FnOnce() -> Result<ureq::Response, ureq::Error>,
-    ) -> Result<(u16, String), ureq::Error> {
+        callable: impl FnOnce() -> Result<ureq::Response, Error>,
+    ) -> Result<(u16, String), Error> {
         match callable() {
-            Ok(response) | Err(ureq::Error::Status(_, response)) => Ok((
+            Ok(response) | Err(Error::Status(_, response)) => Ok((
                 response.status(),
                 response.into_string().unwrap_or(String::new()),
             )),
@@ -181,7 +189,7 @@ pub mod assertions {
                 assert_eq!(status, code,);
                 if let Some(body) = body {
                     let actual_body = res.into_string().unwrap();
-                    assert_eq!(body, actual_body,);
+                    assert_eq!(body, actual_body);
                 }
             }
             err => panic!(

@@ -151,9 +151,9 @@ fn parse_request_line(scnr: &mut BullshitScanner) -> Result<(Proto, Method, Stri
 
     let proto = (match words.get(2) {
         Some(proto) => match Proto::from(proto) {
-            Proto::Unsupported => Err(ServerError::wrapping(Box::new(UnsupportedProtoError(Some(
-                String::from(proto),
-            ))))),
+            Proto::Unsupported => Err(ServerError::wrapping(Box::new(UnsupportedProtoError(
+                Some(String::from(proto)),
+            )))),
             proto => Ok(proto),
         },
         None => Err(map_err("protocol")),
@@ -161,9 +161,9 @@ fn parse_request_line(scnr: &mut BullshitScanner) -> Result<(Proto, Method, Stri
 
     let method = (match words.get(0) {
         Some(method) => match Method::from(method) {
-            Method::Unsupported => Err(ServerError::wrapping(Box::new(UnsupportedMethodError(Some(
-                String::from(method),
-            ))))),
+            Method::Unsupported => Err(ServerError::wrapping(Box::new(UnsupportedMethodError(
+                Some(String::from(method)),
+            )))),
             method => Ok(method),
         },
         None => Err(map_err("method")),

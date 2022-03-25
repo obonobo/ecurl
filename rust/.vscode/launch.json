@@ -135,8 +135,8 @@
           "kind": "bin"
         }
       },
-      // "args": [],
-      "args": ["-v", "-d", "/"],
+      "args": ["-h"],
+      // "args": ["-v", "-d", "/"],
       "cwd": "${workspaceFolder}"
     },
     {

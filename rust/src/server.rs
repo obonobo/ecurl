@@ -489,6 +489,7 @@ fn parse_mimetype(filename: &str) -> String {
                 "pdf" => mime::APPLICATION_PDF,
                 "gitignore" => mime::TEXT_PLAIN,
                 "lock" => mime::TEXT_PLAIN,
+                "md" => return String::from("text/markdown"),
                 "toml" => return String::from("application/toml"),
                 _ => mime::TEXT_PLAIN,
             },

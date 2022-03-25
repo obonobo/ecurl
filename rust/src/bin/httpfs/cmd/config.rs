@@ -9,10 +9,7 @@ pub struct ConfigError(pub String);
 
 impl Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0.as_str() {
-            "" => write!(f, "ConfigError"),
-            s => write!(f, "ConfigError: {}", s),
-        }
+        write!(f, "{}", self.0.as_str())
     }
 }
 
@@ -39,21 +36,20 @@ pub struct Config {
 impl Config {
     pub fn from_args(args: impl Iterator<Item = String>) -> Result<Config, i32> {
         Config::try_parse_from(args)
-            .map_err(|e| ConfigError(format!("{}", e))) // We don't actually care about the error
+            .map_err(|e| ConfigError(format!("{}", e)))
             .and_then(Self::verify)
-            .map_err(|_| EXIT_NOT_OKAY)
+            .map_err(|e| {
+                eprint!("{}{}", e, if e.0.ends_with("\n") { "" } else { "\n" });
+                EXIT_NOT_OKAY
+            })
     }
 
     pub fn verify(self) -> Result<Self, ConfigError> {
-        if !Self::dir_exists(self.dir.as_str()) {
+        if !Path::new(self.dir.as_str()).exists() {
             Err(ConfigError(String::from("ConfigError")))
         } else {
             Ok(self)
         }
-    }
-
-    fn dir_exists(dir: &str) -> bool {
-        Path::new(dir).exists()
     }
 }
 

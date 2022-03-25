@@ -141,6 +141,7 @@ fn test_multiple_clients_reading_and_writing_same_file() {
     let handle = server();
     let contents = "Hello world\n";
     let file = TempFile::new("hello.txt", contents).unwrap();
+
     let n = 25;
     let mut threads = Vec::with_capacity(n);
     let (taskout, taskin) = mpsc::channel::<Result<(u16, String), ureq::Error>>();
@@ -163,10 +164,8 @@ fn test_multiple_clients_reading_and_writing_same_file() {
     // Spawn the clients, some will read, some will write
     for i in 0..n {
         let (out, path, task) = (taskout.clone(), addr.clone(), task());
-        let body = format!("{}From thread {}", contents, i);
-        threads.push(thread::spawn(move || {
-            out.send(task(&path, &body)).unwrap();
-        }))
+        let body = format!("From thread {}", i);
+        threads.push(thread::spawn(move || out.send(task(&path, &body)).unwrap()));
     }
 
     // Assert client results
@@ -175,7 +174,11 @@ fn test_multiple_clients_reading_and_writing_same_file() {
     for (i, res) in results.iter().enumerate() {
         match res {
             Ok((code, body)) => match code {
-                200 => assert!(body.contains(contents), "Body: {}", body),
+                200 => assert!(
+                    body.contains("From thread") || body.contains(contents),
+                    "Body: {}",
+                    body
+                ),
                 201 => assert_eq!("", body),
                 code => panic!("Expected status 200 or 201 but got {}", code),
             },

@@ -13,15 +13,16 @@ buildcmd = cargo build --workspace --release
 download:
 	cargo fetch
 
-build: download
+build:
 	$(buildcmd)
 	cp target/release/httpfs ./
 
 # Build statically linked against glibc
-static: download
+static:
 	RUSTFLAGS='-C target-feature=+crt-static' \
 		$(buildcmd) \
 			--target x86_64-unknown-linux-gnu
+	cp target/x86_64-unknown-linux-gnu/release/httpfs ./
 
 clean:
 	cargo clean
