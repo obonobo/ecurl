@@ -19,9 +19,8 @@ pub struct TempFile {
 }
 
 impl TempFile {
-    /// Creates a temporary file with the provided contents. Returns the filename +
-    /// a closure that deletes the temp file. To avoid filename conflicts, the
-    /// filename will be prefixed with a random string
+    /// Creates a temporary file with the provided contents. To avoid filename
+    /// conflicts, the filename will be prefixed with a random string
     pub fn new(filename: &str, contents: &str) -> Result<Self, Error> {
         let filename = vec![
             "TEMP_",
@@ -172,7 +171,7 @@ pub mod better_ureq {
         match callable() {
             Ok(response) | Err(Error::Status(_, response)) => Ok((
                 response.status(),
-                response.into_string().unwrap_or(String::new()),
+                response.into_string().unwrap_or_default(),
             )),
             Err(e) => Err(e),
         }

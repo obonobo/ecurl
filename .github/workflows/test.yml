@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: rust
+        working-directory: httpfs
     strategy:
       fail-fast: true
       matrix:

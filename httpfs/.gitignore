@@ -18,3 +18,4 @@ TEMP_*
 
 # Binaries
 httpfs
+!httpfs/

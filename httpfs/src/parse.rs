@@ -118,11 +118,11 @@ fn parse_headers(scnr: &mut BullshitScanner) -> Result<HashMap<String, String>, 
             )))))
         })?;
 
-        if &line == "" {
+        if line.is_empty() {
             return Ok(headers);
         }
 
-        let (left, right) = line.split_once(":").ok_or_else(|| {
+        let (left, right) = line.split_once(':').ok_or_else(|| {
             ServerError::new().wrap(Box::new(MalformedRequestError(Some(format!(
                 "failed to parse request header '{}'",
                 line
@@ -139,7 +139,7 @@ fn parse_request_line(scnr: &mut BullshitScanner) -> Result<(Proto, Method, Stri
         .map(|l| l.0)
         .map_err(|e| ServerError::new().msg(&format!("{}", e)))?
         .split_whitespace()
-        .map(|s| String::from(s))
+        .map(String::from)
         .collect::<Vec<_>>();
 
     let map_err = |word| {

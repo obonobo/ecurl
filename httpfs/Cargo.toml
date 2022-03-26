@@ -16,3 +16,6 @@ rand = "0.8.5"
 stringreader = "0.1.1"
 threadpool = "1.8.1"
 ureq = "2.4.0"
+
+[dev-dependencies]
+clippy = "0.0.302"

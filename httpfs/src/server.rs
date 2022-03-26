@@ -4,7 +4,10 @@ use std::{
     io::{Read, Write},
     net::{IpAddr, Ipv4Addr, TcpListener, TcpStream},
     path::{Path, PathBuf},
-    sync::{Arc, Barrier, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Barrier, Mutex,
+    },
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -62,7 +65,7 @@ pub struct Handle {
     /// The [ServerRunner] thread will poll this shared variable in between
     /// accepting connections. If the value contained within the [mutex](Mutex)
     /// is true, then the server thread will stop accepting requests.
-    exit: Arc<Mutex<bool>>,
+    exit: Arc<AtomicBool>,
     done: Arc<Barrier>,
     main: Option<JoinHandle<()>>,
 }
@@ -70,7 +73,7 @@ pub struct Handle {
 impl Handle {
     pub fn new() -> Self {
         Self {
-            exit: Arc::new(Mutex::new(false)),
+            exit: Arc::new(AtomicBool::new(false)),
             done: Arc::new(Barrier::new(2)),
             main: None,
         }
@@ -78,10 +81,7 @@ impl Handle {
 
     /// Gracefully shutdown the server
     pub fn shutdown(&mut self) {
-        {
-            let mut exit = self.exit.lock().unwrap();
-            *exit = true;
-        }
+        self.exit.store(true, Ordering::SeqCst);
         self.done.wait();
     }
 
@@ -97,9 +97,17 @@ impl Handle {
     }
 }
 
+impl Default for Handle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Clone for Handle {
     /// Note: this does not clone the main thread of the handle, which is not
-    /// clonable. Only the original handle may control its main thread.
+    /// clonable. Only the original handle may control its main thread. Cloneed
+    /// versions of the handle can still remotely shutdown the main thread, but
+    /// only the original handle can call [Handle::join]
     fn clone(&self) -> Self {
         Self {
             exit: self.exit.clone(),
@@ -139,11 +147,9 @@ impl ServerRunner {
                 let mut stream = match stream {
                     Ok(stream) => stream,
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        // Poll the handle
-                        {
-                            if *handlec.exit.lock().unwrap() {
-                                break;
-                            }
+                        // Poll the handle exit flag
+                        if handlec.exit.load(Ordering::SeqCst) {
+                            break;
                         }
                         thread::sleep(Duration::from_millis(1));
                         continue;
@@ -157,7 +163,7 @@ impl ServerRunner {
                         .peer_addr()
                         .ok()
                         .map(|addr| format!("{}", addr))
-                        .unwrap_or(String::from("..."))
+                        .unwrap_or_else(|| String::from("..."))
                 );
 
                 let dir = dirc.clone();
@@ -223,7 +229,7 @@ impl Requested {
             .ok()
             .unwrap_or_else(|| PathBuf::from(dir));
 
-        let file = dir.join(req.file.trim_start_matches("/"));
+        let file = dir.join(req.file.trim_start_matches('/'));
         let file = file
             .canonicalize()
             .ok()
@@ -259,7 +265,7 @@ impl Requested {
     /// `false` otherwise
     fn file_not_allowed(file: &str, dir: &str) -> bool {
         let mut collect = Vec::with_capacity(64);
-        for segment in file.split("/") {
+        for segment in file.split('/') {
             match segment {
                 "" | "." => continue,
                 ".." => {
@@ -276,7 +282,7 @@ impl Requested {
 }
 
 /// Saves the given file with the provided file name
-fn accept_file_upload<'a>(filename: &str, body: &'a mut dyn Read) -> Result<(), ServerError> {
+fn accept_file_upload(filename: &str, body: &mut dyn Read) -> Result<(), ServerError> {
     let path = Path::new(filename);
     if path.is_dir() {
         return Err(ServerError::writing_to_directory());
@@ -334,7 +340,7 @@ fn write_response_with_headers(
     headers: Option<HashMap<&str, &str>>,
     body: Option<&mut impl Read>,
 ) -> Result<(), ServerError> {
-    let headers = headers.unwrap_or_else(HashMap::new);
+    let headers = headers.unwrap_or_default();
     log::debug!(
         "Writing response {}, length {}, headers {:?}",
         status,
@@ -401,7 +407,7 @@ fn write_file(stream: &mut TcpStream, mut fh: File, filename: &str) -> Result<()
                 "Content-Disposition",
                 &format!(
                     r#"attachment; filename="{}""#,
-                    filename.split("/").last().unwrap_or(filename)
+                    filename.split('/').last().unwrap_or(filename)
                 ),
             ),
         ])),
@@ -446,7 +452,7 @@ fn abs_path(file: &str) -> String {
         .canonicalize()
         .ok()
         .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or(String::from(file))
+        .unwrap_or_else(|| String::from(file))
 }
 
 fn write_not_allowed(stream: &mut TcpStream, filename: &str, dir: &str) -> Result<(), ServerError> {
@@ -474,9 +480,9 @@ fn write_not_allowed(stream: &mut TcpStream, filename: &str, dir: &str) -> Resul
 
 /// Parses the mime type from a non-exhaustive list
 fn parse_mimetype(filename: &str) -> String {
-    match filename.split("/").last().unwrap_or(filename) {
+    match filename.split('/').last().unwrap_or(filename) {
         "Makefile" => mime::TEXT_PLAIN,
-        other => match other.split(".").last() {
+        other => match other.split('.').last() {
             Some(x) => match x {
                 "png" => mime::IMAGE_PNG,
                 "jpg" => mime::IMAGE_JPEG,

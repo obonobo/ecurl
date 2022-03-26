@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 #[cfg(test)]
 pub mod test_utils;
 
@@ -86,7 +88,7 @@ fn test_forbidden() {
         .next_line()
         .unwrap()
         .0
-        .split_once(" ")
+        .split_once(' ')
         .map(|pair| String::from(pair.1))
         .unwrap();
 
@@ -96,7 +98,7 @@ fn test_forbidden() {
     let body = scnr
         .lines()
         .map(|l| l.0)
-        .skip_while(|line| line != "") // Skip headers
+        .skip_while(|line| !line.is_empty()) // Skip headers
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -157,7 +159,7 @@ fn test_multiple_clients_reading_and_writing_same_file() {
             Arc::new(if read % 2 == 0 {
                 |path, _| ureq_get_errors_are_ok(path)
             } else {
-                |path, body| ureq_post_errors_are_ok(path, body)
+                ureq_post_errors_are_ok
             })
         };
 
@@ -170,7 +172,7 @@ fn test_multiple_clients_reading_and_writing_same_file() {
 
     // Assert client results
     threads.into_iter().for_each(|t| t.join().unwrap());
-    let results = taskin.iter().take(n).collect::<Vec<_>>();
+    let results = taskin.iter().take(n).collect::<Vec<_>>(); // debug
     for (i, res) in results.iter().enumerate() {
         match res {
             Ok((code, body)) => match code {

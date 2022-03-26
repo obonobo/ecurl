@@ -124,8 +124,8 @@ impl<'a> BullshitScanner<'a> {
         let cap = self.buf.bites.len();
         let (left, right) = self.buf.bites[..cap].split_at_mut(self.buf.red);
         let n = min(left.len(), right.len());
-        left[..n].copy_from_slice(&mut right[..n]);
-        self.buf.filled = self.buf.filled - self.buf.red;
+        left[..n].copy_from_slice(&right[..n]);
+        self.buf.filled -= self.buf.red;
         self.buf.red = 0;
 
         match self.reader.read(&mut self.buf.bites[self.buf.filled..]) {
@@ -152,9 +152,8 @@ impl<'a> BullshitScanner<'a> {
         use std::str::from_utf8;
         for (i, b) in buf.iter().enumerate() {
             if *b == b'\n' {
-                let map_err =
-                    from_utf8(&buf[..i]).map_err(|e| BullshitError::wrapping(Box::new(e)))?;
-                return Ok((String::from(map_err.trim_end_matches(['\r', '\n'])), i + 1));
+                let err = from_utf8(&buf[..i]).map_err(|e| BullshitError::wrapping(Box::new(e)))?;
+                return Ok((String::from(err.trim_end_matches(['\r', '\n'])), i + 1));
             }
         }
 
@@ -308,6 +307,12 @@ pub mod errors {
         }
     }
 
+    impl Default for BullshitError {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl std::error::Error for BullshitError {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             Some(self.err.as_ref()?.as_ref())
@@ -316,7 +321,11 @@ pub mod errors {
 
     impl std::fmt::Display for BullshitError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "{}", self.msg.clone().unwrap_or(String::from("")))
+            write!(
+                f,
+                "{}",
+                self.msg.clone().unwrap_or_else(|| String::from(""))
+            )
         }
     }
 }
@@ -364,9 +373,9 @@ mod tests {
         culpa qui officia deserunt mollit anim id est laborum.
         ", BUFSIZES),
 
-        big: ((0..1000).map(|_| "big!\n").collect::<String>(), BUFSIZES),
+        big: ("big!\n".repeat(1000), BUFSIZES),
 
-        very_big: (std::iter::repeat("very big!\n").take(1<<16).collect::<String>(), BUFSIZES),
+        very_big: ("very big!\n".repeat(1<<16), BUFSIZES),
     }
 
     macro_rules! bites_iterator_tests {
@@ -411,6 +420,6 @@ mod tests {
         let mut reader = stringreader::StringReader::new(data);
         let mut scnr = BullshitScanner::new(&mut reader);
         let out = scnr.lines().map(|l| l.0).collect::<String>();
-        assert_eq!(data.replace("\n", "").trim_end(), out);
+        assert_eq!(data.replace('\n', "").trim_end(), out);
     }
 }
