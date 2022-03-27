@@ -3,10 +3,7 @@ name: Build
 on:
   pull_request:
   push:
-    branches:
-      - "*"
-      # - main
-      # - parser
+    branches: ["*"]
   workflow_dispatch:
     inputs:
       logLevel:
@@ -21,15 +18,13 @@ jobs:
   test-go:
     name: Run Go tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: httpc
     strategy:
       fail-fast: true
       matrix:
-        go-version:
-          - "1.18" # Generics
-          # - "1.17"
-          # - "1.16"
-          # - "1.15"
-          # - "1.14"
+        go-version: ["1.18"]
     steps:
       - uses: actions/checkout@v2
       - name: Use go${{ matrix.go-version }}
@@ -51,8 +46,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        rust-version:
-          - stable
+        rust-version: [stable]
     steps:
       - uses: actions/checkout@v2
       - name: Use rust ${{ matrix.rust-version }}
