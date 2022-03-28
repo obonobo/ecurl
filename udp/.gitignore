@@ -21,3 +21,6 @@ httpfs
 !httpfs/
 httpc
 !httpc/
+
+# Log files
+router.log
