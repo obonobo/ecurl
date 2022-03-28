@@ -7,7 +7,7 @@ default: build
 #
 
 SHELL = bash
-out = httpfs
+out = udp
 buildcmd = cargo build --workspace --release
 
 download:
@@ -15,14 +15,12 @@ download:
 
 build:
 	$(buildcmd)
-	cp target/release/httpfs ./
 
 # Build statically linked against glibc
 static:
 	RUSTFLAGS='-C target-feature=+crt-static' \
 		$(buildcmd) \
 			--target x86_64-unknown-linux-gnu
-	cp target/x86_64-unknown-linux-gnu/release/httpfs ./
 
 clean:
 	cargo clean
@@ -30,3 +28,7 @@ clean:
 
 test:
 	cargo test
+
+# Runs the router script with some default arguments
+router:
+	./resources/a3/router.go --drop-rate 0 --max-delay 0
