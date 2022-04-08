@@ -1,4 +1,4 @@
-.PHONY: default build static clean
+.PHONY: default build static clean copy
 default: build
 
 #
@@ -7,8 +7,8 @@ default: build
 #
 
 SHELL = bash
-out = udp
 buildcmd = cargo build --workspace --release
+copycmd = cp ./target/*/release/{server,client} ./
 
 download:
 	cargo fetch
@@ -18,9 +18,7 @@ build:
 
 # Build statically linked against glibc
 static:
-	RUSTFLAGS='-C target-feature=+crt-static' \
-		$(buildcmd) \
-			--target x86_64-unknown-linux-gnu
+	RUSTFLAGS='-C target-feature=+crt-static' $(buildcmd) --target x86_64-unknown-linux-gnu
 
 clean:
 	cargo clean
@@ -32,3 +30,6 @@ test:
 # Runs the router script with some default arguments
 router:
 	./resources/a3/router.go --drop-rate 0 --max-delay 0
+
+copy:
+	$(copycmd)

@@ -21,6 +21,10 @@ httpfs
 !httpfs/
 httpc
 !httpc/
+client
+!client/
+server
+!server/
 
 # Log files
 router.log

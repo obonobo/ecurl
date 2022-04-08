@@ -1,4 +1,4 @@
-.PHONY: default build static clean
+.PHONY: default build static clean copy
 default: build
 
 #
@@ -7,22 +7,18 @@ default: build
 #
 
 SHELL = bash
-out = httpfs
 buildcmd = cargo build --workspace --release
+copycmd = cp ./target/*/release/httpfs ./
 
 download:
 	cargo fetch
 
 build:
 	$(buildcmd)
-	cp target/release/httpfs ./
 
 # Build statically linked against glibc
 static:
-	RUSTFLAGS='-C target-feature=+crt-static' \
-		$(buildcmd) \
-			--target x86_64-unknown-linux-gnu
-	cp target/x86_64-unknown-linux-gnu/release/httpfs ./
+	RUSTFLAGS='-C target-feature=+crt-static' $(buildcmd) --target x86_64-unknown-linux-gnu
 
 clean:
 	cargo clean
@@ -30,3 +26,6 @@ clean:
 
 test:
 	cargo test
+
+copy:
+	$(copycmd)

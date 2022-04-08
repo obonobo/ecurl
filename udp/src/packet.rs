@@ -315,7 +315,6 @@ mod tests {
         $(
             #[test]
             fn $name() {
-                let peer = default_peer();
                 let data = thread_rng()
                     .sample_iter(&Alphanumeric)
                     .take($length)
@@ -323,7 +322,7 @@ mod tests {
                     .collect::<String>();
 
                 assert_packet_stream(
-                    Packet::stream(data.as_bytes()).peer(peer),
+                    Packet::stream(data.as_bytes()).peer(default_peer()),
                     &to_packet_chunks(&data),
                 )
             }
@@ -359,11 +358,8 @@ mod tests {
     }
 
     /// Asserts that a packet stream has the specified contents
-    fn assert_packet_stream(
-        packet_iterator: impl Iterator<Item = Packet>,
-        expected_contents: &[Packet],
-    ) {
-        assert_eq!(expected_contents, packet_iterator.collect::<Vec<_>>());
+    fn assert_packet_stream(packets: impl Iterator<Item = Packet>, expected: &[Packet]) {
+        assert_eq!(expected, packets.collect::<Vec<_>>());
     }
 
     /// Converts a string to a Packet buffer

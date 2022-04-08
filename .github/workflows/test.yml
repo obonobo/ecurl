@@ -57,10 +57,7 @@ jobs:
       - uses: Swatinem/rust-cache@v1
       - run: make test
       - run: make
-      - name: Static build
-        run: |
-          make static
-          file target/x86_64-unknown-linux-gnu/release/httpfs | grep 'statically linked'
+      - run: make static
 
   test-udp:
     name: Run Rust udp tests
@@ -82,7 +79,4 @@ jobs:
       - uses: Swatinem/rust-cache@v1
       - run: make test
       - run: make
-      - name: Static build
-        run: |
-          make static
-          file target/x86_64-unknown-linux-gnu/release/httpfs | grep 'statically linked'
+      - run: make static

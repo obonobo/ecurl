@@ -1,9 +1,8 @@
+use clap::Parser;
 use std::{
     fmt::Display,
     io::{Error, ErrorKind},
 };
-
-use clap::Parser;
 
 const EXIT_NOT_OKAY: i32 = 1;
 const EXIT_OKAY: i32 = 0;
@@ -42,7 +41,7 @@ impl ServerConfig {
     }
 
     pub fn verify(self) -> Result<Self, Error> {
-        Ok(self)
+        std::fs::metadata(&self.dir).map(|_| self)
     }
 }
 
@@ -54,7 +53,7 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
     let cfg = match ServerConfig::from_args(args) {
         Ok(cfg) => cfg,
         Err((exit, err)) => {
-            eprintln!("{}", err);
+            eprint!("{}", err);
             return exit;
         }
     };
