@@ -35,7 +35,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_args(args: impl Iterator<Item = String>) -> Result<Config, i32> {
-        Config::try_parse_from(args)
+        Self::try_parse_from(args)
             .map_err(|e| ConfigError(format!("{}", e)))
             .and_then(Self::verify)
             .map_err(|e| {
