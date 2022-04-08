@@ -1,8 +1,9 @@
-use std::{
-    fmt::Display,
-    io::{Error, Read},
-    net::Ipv4Addr,
-};
+//! Contains code for dealing with the custom packet structure in the udp
+//! assignment
+
+use std::fmt::Display;
+use std::io::{Error, ErrorKind, Read};
+use std::net::Ipv4Addr;
 
 /// The custom packet structure defined by the assignment requirements
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
@@ -88,7 +89,7 @@ impl TryFrom<&[u8]> for Packet {
     type Error = Error;
 
     fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        use std::io::ErrorKind;
+        let err = |msg| move |_| Error::new(ErrorKind::Other, msg);
 
         if buf.len() < Self::MIN_PACKET_SIZE {
             return Err(Error::new(
@@ -101,7 +102,6 @@ impl TryFrom<&[u8]> for Packet {
             ));
         }
 
-        let err = |msg| move |_| Error::new(ErrorKind::Other, msg);
         Ok(Self {
             ptyp: buf[0].into(),
             nseq: u32::from_be_bytes(
@@ -311,8 +311,7 @@ mod tests {
 
     /// Tests the ability of the [Packet::stream] function to chunk up data,
     macro_rules! test_packet_stream_chunkability {
-        ($($name:ident: $length:expr,)*) => {
-        $(
+        ($($name:ident: $length:expr,)*) => {$(
             #[test]
             fn $name() {
                 let data = thread_rng()
@@ -326,8 +325,7 @@ mod tests {
                     &to_packet_chunks(&data),
                 )
             }
-        )*
-    };
+        )*};
     }
 
     test_packet_stream_chunkability! {
