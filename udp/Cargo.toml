@@ -9,3 +9,4 @@ clippy = "0.0.302"
 [dependencies]
 # byteorder = "1.4.3"
 clap = {version = "3.1.6", features = ["derive", "wrap_help"]}
+rand = "0.8.5"

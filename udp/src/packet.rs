@@ -30,10 +30,27 @@ impl Packet {
     /// The maximum size of the data field of a packet
     pub const PACKET_DATA_CAPACITY: usize = 1014;
 
+    /// Converts a byte source to a [stream of packets](PacketStream).
+    ///
+    /// All packets will by of type [PacketType::Data], with a default peer and
+    /// port number, nseq will auto increment with each packet
+    pub fn stream<R: Read>(reader: R) -> PacketStream<R> {
+        let p = Self::default();
+        PacketStream {
+            reader,
+            packet_type: p.ptyp,
+            seq: 1,
+            port: p.port,
+            peer: p.peer,
+            active: false,
+            buf: [0; Packet::PACKET_DATA_CAPACITY],
+        }
+    }
+
     /// Serializes the entire packet to a byte buffer.
     pub fn raw(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(self.data.len() + Self::MIN_PACKET_SIZE);
-        buf.push(self.ptyp.clone().into());
+        buf.push(self.ptyp.into());
         buf.append(&mut self.nseq.to_be_bytes().into());
         buf.append(&mut self.peer.octets().into());
         buf.append(&mut self.port.to_be_bytes().into());
@@ -58,15 +75,6 @@ impl Packet {
     /// Panics if the buffer does not contain a valid packet
     pub fn from(buf: &[u8]) -> Self {
         Self::try_from(buf).unwrap()
-    }
-
-    /// Converts a byte source to a [stream of packets](PacketStream).
-    ///
-    /// All packets will by of type [PacketType::Data], with a default peer and
-    /// port number, nseq will auto increment with each packet. You can set the
-    /// starting nseq by calling [PacketStream::]
-    pub fn stream<R: Read>(reader: R) -> PacketStream<R> {
-        todo!()
     }
 }
 
@@ -129,55 +137,69 @@ impl Default for Packet {
 
 pub struct PacketStream<R: Read> {
     reader: R,
+    packet_type: PacketType,
     seq: u32,
     port: u16,
     peer: Ipv4Addr,
     active: bool,
-}
-
-impl<R: Read> PacketStream<R> {
-    /// Sets the starting sequence number for your packet stream. If items have
-    /// already been taken from the stream, this function does nothing.
-    pub fn seq(mut self, seq: u32) -> Self {
-        if self.active {
-            return self;
-        }
-        self.seq = seq;
-        self
-    }
-
-    /// Sets the port number for your packet stream. If items have already been
-    /// taken from the stream, this function does nothing.
-    pub fn port(mut self, port: u16) -> Self {
-        if self.active {
-            return self;
-        }
-        self.port = port;
-        self
-    }
-
-    /// Sets the peer ip address for your packet stream. If items have already
-    /// been taken from the stream, this function does nothing.
-    pub fn peer(mut self, peer: Ipv4Addr) -> Self {
-        if self.active {
-            return self;
-        }
-        self.peer = peer;
-        self
-    }
+    buf: [u8; Packet::PACKET_DATA_CAPACITY],
 }
 
 impl<R: Read> Iterator for PacketStream<R> {
     type Item = Packet;
 
+    /// Reads from the [PacketStream's](PacketStream) inner reader in
+    /// [Packet](Packet) sized chunks
     fn next(&mut self) -> Option<Self::Item> {
         self.active = true;
-        todo!()
+
+        // Read some data from the inner reader
+        let data = {
+            let n = self.reader.read(&mut self.buf).ok().filter(|n| *n != 0)?;
+            &self.buf[..n]
+        };
+
+        let p = Packet {
+            data: data.into(),
+            ptyp: self.packet_type,
+            nseq: self.seq,
+            peer: self.peer,
+            port: self.port,
+        };
+
+        self.seq += 1;
+        Some(p)
     }
 }
 
+/// A macro for generating [PacketStream] setter functions
+macro_rules! packet_stream_setter {
+    ($name:ident, $type:ty) => {
+        pub fn $name(mut self, $name: $type) -> Self {
+            if self.active {
+                return self;
+            }
+            self.$name = $name;
+            self
+        }
+    };
+    ($name:ident, $type:ty, $does_not_need_active:expr) => {
+        pub fn $name(mut self, $name: $type) -> Self {
+            self.$name = $name;
+            self
+        }
+    };
+}
+
+impl<R: Read> PacketStream<R> {
+    packet_stream_setter!(seq, u32);
+    packet_stream_setter!(port, u16, false);
+    packet_stream_setter!(peer, Ipv4Addr, false);
+    packet_stream_setter!(packet_type, PacketType, false);
+}
+
 /// The type of a packet
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub enum PacketType {
     Ack,
     Syn,
@@ -242,5 +264,122 @@ impl Display for PacketType {
 impl Default for PacketType {
     fn default() -> Self {
         Self::Ack
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Packet, PacketType};
+    use rand::distributions::Alphanumeric;
+    use rand::{thread_rng, Rng};
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn test_packet_stream_empty() {
+        assert_packet_stream(Packet::stream("".as_bytes()), &[]);
+    }
+
+    #[test]
+    fn test_packet_stream_simple() {
+        let peer = default_peer();
+        let data = "Hello world!";
+        assert_packet_stream(
+            Packet::stream(data.as_bytes())
+                .seq(1)
+                .port(8080)
+                .peer(peer)
+                .packet_type(PacketType::Data),
+            &[Packet {
+                peer,
+                port: 8080,
+                ptyp: PacketType::Data,
+                nseq: 1,
+                data: data.as_bytes().into(),
+            }],
+        )
+    }
+
+    #[test]
+    fn test_packet_stream_two_packets() {
+        let peer = default_peer();
+        let data = "a".repeat(Packet::PACKET_DATA_CAPACITY).repeat(2);
+        assert_packet_stream(
+            Packet::stream(data.as_bytes()).peer(peer),
+            &to_packet_chunks(&data),
+        )
+    }
+
+    /// Tests the ability of the [Packet::stream] function to chunk up data,
+    macro_rules! test_packet_stream_chunkability {
+        ($($name:ident: $length:expr,)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let peer = default_peer();
+                let data = thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take($length)
+                    .map(char::from)
+                    .collect::<String>();
+
+                assert_packet_stream(
+                    Packet::stream(data.as_bytes()).peer(peer),
+                    &to_packet_chunks(&data),
+                )
+            }
+        )*
+    };
+    }
+
+    test_packet_stream_chunkability! {
+        test_stream_chunking_size_2: 2,
+        test_stream_chunking_size_4: 4,
+        test_stream_chunking_size_8: 8,
+        test_stream_chunking_size_16: 16,
+        test_stream_chunking_size_32: 32,
+        test_stream_chunking_size_64: 64,
+        test_stream_chunking_size_128: 128,
+        test_stream_chunking_size_256: 256,
+        test_stream_chunking_size_512: 512,
+        test_stream_chunking_size_1024: 1024,
+        test_stream_chunking_size_2048: 2048,
+        test_stream_chunking_size_4096: 4096,
+        test_stream_chunking_size_8192: 8192,
+        test_stream_chunking_size_16384: 16384,
+        test_stream_chunking_size_32768: 32768,
+        test_stream_chunking_size_65536: 65536,
+        test_stream_chunking_size_131072: 131072,
+        test_stream_chunking_size_262144: 262144,
+        test_stream_chunking_size_524288: 524288,
+        test_stream_chunking_size_1048576: 1048576,
+    }
+
+    fn default_peer() -> Ipv4Addr {
+        Ipv4Addr::new(192, 168, 2, 1)
+    }
+
+    /// Asserts that a packet stream has the specified contents
+    fn assert_packet_stream(
+        packet_iterator: impl Iterator<Item = Packet>,
+        expected_contents: &[Packet],
+    ) {
+        assert_eq!(expected_contents, packet_iterator.collect::<Vec<_>>());
+    }
+
+    /// Converts a string to a Packet buffer
+    fn to_packet_chunks(data: &str) -> Vec<Packet> {
+        let mut seq = 1;
+        data.as_bytes()
+            .chunks(Packet::PACKET_DATA_CAPACITY)
+            .map(|chunk| Packet {
+                nseq: {
+                    seq += 1;
+                    seq - 1
+                },
+                peer: default_peer(),
+                data: chunk.into(),
+                ..Default::default()
+            })
+            .collect()
     }
 }
