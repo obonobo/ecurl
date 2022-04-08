@@ -4,7 +4,7 @@ use std::{fmt::Display, net::Ipv4Addr};
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
 pub struct Packet {
     /// Packet type. Possible value
-    pub ptyp: u8,
+    pub ptyp: PacketType,
 
     /// Sequence number, big endian
     pub nseq: u32,
@@ -25,6 +25,7 @@ impl Packet {
     /// Serializes the entire packet to a byte buffer.
     pub fn raw(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(self.data.len() + Self::MIN_PACKET_SIZE);
+        buf.push(self.ptyp.clone().into());
         buf.append(&mut self.nseq.to_be_bytes().into());
         buf.append(&mut self.peer.octets().into());
         buf.append(&mut self.port.to_be_bytes().into());
@@ -33,11 +34,11 @@ impl Packet {
     }
 }
 
-// impl Into<Vec<u8>> for Packet {
-//     fn into(self) -> Vec<u8> {
-//         self.raw()
-//     }
-// }
+impl From<Packet> for Vec<u8> {
+    fn from(p: Packet) -> Self {
+        p.raw()
+    }
+}
 
 impl From<Vec<u8>> for Packet {
     /// Converts a buffer into a Packet
@@ -51,7 +52,7 @@ impl From<Vec<u8>> for Packet {
         }
 
         Self {
-            ptyp: buf[0],
+            ptyp: buf[0].into(),
             nseq: u32::from_be_bytes(buf[1..5].try_into().unwrap_or([0; 4])),
             peer: Ipv4Addr::from(buf[5..9].try_into().unwrap_or([0; 4])),
             port: u16::from_be_bytes(buf[9..11].try_into().unwrap_or([0; 2])),
@@ -73,7 +74,7 @@ impl Default for Packet {
 }
 
 /// The type of a packet
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum PacketType {
     Ack,
     Syn,
@@ -116,8 +117,27 @@ impl From<u8> for PacketType {
     }
 }
 
+impl From<PacketType> for u8 {
+    fn from(p: PacketType) -> u8 {
+        match p {
+            PacketType::Ack => 0,
+            PacketType::Syn => 1,
+            PacketType::SynAck => 2,
+            PacketType::Nak => 3,
+            PacketType::Data => 4,
+            PacketType::Invalid => 5,
+        }
+    }
+}
+
 impl Display for PacketType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+impl Default for PacketType {
+    fn default() -> Self {
+        Self::Ack
     }
 }
