@@ -346,7 +346,7 @@ mod tests {
             fn $name() {
                 let (input, bufsizes) = $value;
                 for bufsize in bufsizes.iter() {
-                    let mut reader = stringreader::StringReader::new(&input);
+                    let mut reader = input.as_bytes();
                     let mut scnr = BullshitScanner::with_capacity(&mut reader, *bufsize);
                     let mut red = String::new();
                     let res = scnr.read_to_string(&mut red).unwrap();
@@ -395,7 +395,7 @@ mod tests {
     }
 
     fn assert_bites_iterator(input: &str, expected: &str, take: usize) {
-        let mut reader = stringreader::StringReader::new(input);
+        let mut reader = input.as_bytes();
         let mut scnr = BullshitScanner::new(&mut reader);
 
         let partial = BullshitScanner::bites(&mut scnr)
@@ -417,7 +417,7 @@ mod tests {
         da
         sd
         ";
-        let mut reader = stringreader::StringReader::new(data);
+        let mut reader = data.as_bytes();
         let mut scnr = BullshitScanner::new(&mut reader);
         let out = scnr.lines().map(|l| l.0).collect::<String>();
         assert_eq!(data.replace('\n', "").trim_end(), out);

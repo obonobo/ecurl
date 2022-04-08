@@ -323,7 +323,7 @@ fn write_dir_listing(stream: &mut TcpStream, dir: &str) -> Result<(), ServerErro
         "200 OK",
         template.len().try_into().map_err(wrap)?,
         "text/html",
-        Some(&mut stringreader::StringReader::new(template.as_str())),
+        Some(&mut template.as_bytes()),
     )
 }
 
@@ -421,7 +421,7 @@ fn write_500(stream: &mut TcpStream, msg: &str) {
         "500 Internal Server Error",
         msg.len().try_into().unwrap_or(0),
         "text/plain",
-        Some(&mut stringreader::StringReader::new(msg)),
+        Some(&mut msg.as_bytes()),
     ) {
         log::debug!("{}", e);
     };
@@ -443,7 +443,7 @@ fn write_404(stream: &mut TcpStream, filename: &str, dir: &str) -> Result<(), Se
                 .wrap(Box::new(e))
         })?,
         "text/plain",
-        Some(&mut stringreader::StringReader::new(body.as_str())),
+        Some(&mut body.as_bytes()),
     )
 }
 
@@ -474,7 +474,7 @@ fn write_not_allowed(stream: &mut TcpStream, filename: &str, dir: &str) -> Resul
                 .wrap(Box::new(e))
         })?,
         "text/plain",
-        Some(&mut stringreader::StringReader::new(body.as_str())),
+        Some(&mut body.as_bytes()),
     )
 }
 

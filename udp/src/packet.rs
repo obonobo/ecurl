@@ -1,4 +1,8 @@
-use std::{fmt::Display, net::Ipv4Addr};
+use std::{
+    fmt::Display,
+    io::{Error, Read},
+    net::Ipv4Addr,
+};
 
 /// The custom packet structure defined by the assignment requirements
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
@@ -20,7 +24,11 @@ pub struct Packet {
 }
 
 impl Packet {
-    pub const MIN_PACKET_SIZE: usize = 1 + 4 + 4 + 2;
+    /// The size of a packet with an empty data field
+    pub const MIN_PACKET_SIZE: usize = 1 + 4 + 4 + 2; // 11
+
+    /// The maximum size of the data field of a packet
+    pub const PACKET_DATA_CAPACITY: usize = 1014;
 
     /// Serializes the entire packet to a byte buffer.
     pub fn raw(&self) -> Vec<u8> {
@@ -32,6 +40,34 @@ impl Packet {
         buf.extend(self.data.iter());
         buf
     }
+
+    /// Converts a buffer into a Packet. The reason why this is not an
+    /// implementation of [From](core::convert::From) is because that would
+    /// create a blanket implementation of [Into](core::convert::Into) which
+    /// creates ANOTHER blanket implementation of
+    /// [TryFrom](core::convert::TryFrom) where the `Error` is set to
+    /// `Infallible`...
+    ///
+    /// So because of the shitty `TryFrom` that is by default implemented on
+    /// anything with `Into`, we have to do shitty workarounds. In this case, we
+    /// are choosing to us our own custom `TryFrom` and then to just place a
+    /// non-trait `from` method directly on our type.
+    ///
+    /// ### Panics
+    ///
+    /// Panics if the buffer does not contain a valid packet
+    pub fn from(buf: &[u8]) -> Self {
+        Self::try_from(buf).unwrap()
+    }
+
+    /// Converts a byte source to a [stream of packets](PacketStream).
+    ///
+    /// All packets will by of type [PacketType::Data], with a default peer and
+    /// port number, nseq will auto increment with each packet. You can set the
+    /// starting nseq by calling [PacketStream::]
+    pub fn stream<R: Read>(reader: R) -> PacketStream<R> {
+        todo!()
+    }
 }
 
 impl From<Packet> for Vec<u8> {
@@ -40,24 +76,42 @@ impl From<Packet> for Vec<u8> {
     }
 }
 
-impl From<Vec<u8>> for Packet {
-    /// Converts a buffer into a Packet
-    fn from(buf: Vec<u8>) -> Self {
+impl TryFrom<&[u8]> for Packet {
+    type Error = Error;
+
+    fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
+        use std::io::ErrorKind;
+
         if buf.len() < Self::MIN_PACKET_SIZE {
-            panic!(
-                "invalid packet (size = {} bytes), must be at least {} bytes",
-                buf.len(),
-                Self::MIN_PACKET_SIZE
-            )
+            return Err(Error::new(
+                ErrorKind::Other,
+                format!(
+                    "invalid packet (size = {} bytes), must be at least {} bytes",
+                    buf.len(),
+                    Self::MIN_PACKET_SIZE
+                ),
+            ));
         }
 
-        Self {
+        let err = |msg| move |_| Error::new(ErrorKind::Other, msg);
+        Ok(Self {
             ptyp: buf[0].into(),
-            nseq: u32::from_be_bytes(buf[1..5].try_into().unwrap_or([0; 4])),
-            peer: Ipv4Addr::from(buf[5..9].try_into().unwrap_or([0; 4])),
-            port: u16::from_be_bytes(buf[9..11].try_into().unwrap_or([0; 2])),
+            nseq: u32::from_be_bytes(
+                buf[1..5]
+                    .try_into()
+                    .map_err(err("invalid nseq, needs 4 bytes"))?,
+            ),
+            peer: Ipv4Addr::from(
+                TryInto::<[u8; 4]>::try_into(&buf[5..9])
+                    .map_err(err("invalid peer address, needs 4 bytes"))?,
+            ),
+            port: u16::from_be_bytes(
+                buf[9..11]
+                    .try_into()
+                    .map_err(err("invalid port, needs 2 bytes"))?,
+            ),
             data: buf[11..].into(),
-        }
+        })
     }
 }
 
@@ -70,6 +124,55 @@ impl Default for Packet {
             port: Default::default(),
             data: Default::default(),
         }
+    }
+}
+
+pub struct PacketStream<R: Read> {
+    reader: R,
+    seq: u32,
+    port: u16,
+    peer: Ipv4Addr,
+    active: bool,
+}
+
+impl<R: Read> PacketStream<R> {
+    /// Sets the starting sequence number for your packet stream. If items have
+    /// already been taken from the stream, this function does nothing.
+    pub fn seq(mut self, seq: u32) -> Self {
+        if self.active {
+            return self;
+        }
+        self.seq = seq;
+        self
+    }
+
+    /// Sets the port number for your packet stream. If items have already been
+    /// taken from the stream, this function does nothing.
+    pub fn port(mut self, port: u16) -> Self {
+        if self.active {
+            return self;
+        }
+        self.port = port;
+        self
+    }
+
+    /// Sets the peer ip address for your packet stream. If items have already
+    /// been taken from the stream, this function does nothing.
+    pub fn peer(mut self, peer: Ipv4Addr) -> Self {
+        if self.active {
+            return self;
+        }
+        self.peer = peer;
+        self
+    }
+}
+
+impl<R: Read> Iterator for PacketStream<R> {
+    type Item = Packet;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.active = true;
+        todo!()
     }
 }
 
