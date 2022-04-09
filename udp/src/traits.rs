@@ -21,6 +21,26 @@ pub trait Stream: Read + Write {
     fn peer_addr(&self) -> io::Result<SocketAddr>;
 }
 
+/// A generic version of [std::net::tcp::Incoming] that works on any kind of
+/// [Listeners](Listener)
+pub struct StreamIterator<'a, S: Stream> {
+    listener: &'a dyn Listener<'a, S, Self>,
+}
+
+impl<'a, S: Stream> StreamIterator<'a, S> {
+    /// Wraps the provided listener,
+    pub fn new(listener: &'a dyn Listener<'a, S, Self>) -> Self {
+        Self { listener }
+    }
+}
+
+impl<'a, S: Stream> Iterator for StreamIterator<'a, S> {
+    type Item = io::Result<S>;
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(self.listener.accept().map(|p| p.0))
+    }
+}
+
 /// Adaptors for [std::net::tcp]
 mod adaptors {
     use super::{Listener, Stream};
