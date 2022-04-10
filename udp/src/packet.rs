@@ -54,25 +54,26 @@ impl Packet {
     /// Serializes the entire packet to a byte buffer.
     pub fn raw(&self) -> Vec<u8> {
         let mut buf = vec![0; self.len()];
-        let n = self.write_to(&mut buf).unwrap_or(0);
+        let n = self.write_to(&mut buf[..]).unwrap_or(0);
         buf.truncate(n); // should do nothing
         buf
     }
 
-    pub fn write_to(&self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.len() > buf.len() {
+    pub fn write_to(&self, mut buf: impl Write) -> std::io::Result<usize> {
+        let mut n = 0;
+        n += buf.write(&[self.ptyp.into()])?;
+        n += buf.write(self.nseq.to_be_bytes().as_ref())?;
+        n += buf.write(self.peer.octets().as_ref())?;
+        n += buf.write(self.port.to_be_bytes().as_ref())?;
+        n += buf.write(self.data.as_ref())?;
+
+        if n < self.len() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                "buffer is too small to fit this packet",
+                "partial write: buffer is too small to fit this packet",
             ));
         }
 
-        let mut n = 0;
-        n += (&mut buf[n..]).write(&[self.ptyp.into()])?;
-        n += (&mut buf[n..]).write(self.nseq.to_be_bytes().as_ref())?;
-        n += (&mut buf[n..]).write(self.peer.octets().as_ref())?;
-        n += (&mut buf[n..]).write(self.port.to_be_bytes().as_ref())?;
-        n += (&mut buf[n..]).write(self.data.as_ref())?;
         Ok(n)
     }
 
