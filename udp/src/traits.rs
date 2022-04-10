@@ -11,7 +11,7 @@ where
     I: Iterator<Item = io::Result<S>> + 'a,
 {
     fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()>;
-    fn accept(&self) -> io::Result<(S, SocketAddr)>;
+    fn accept(&mut self) -> io::Result<(S, SocketAddr)>;
     fn incoming(&'a self) -> I;
 }
 
@@ -24,12 +24,12 @@ pub trait Stream: Read + Write {
 /// A generic version of [std::net::tcp::Incoming] that works on any kind of
 /// [Listeners](Listener)
 pub struct StreamIterator<'a, S: Stream> {
-    listener: &'a dyn Listener<'a, S, Self>,
+    listener: &'a mut dyn Listener<'a, S, Self>,
 }
 
 impl<'a, S: Stream> StreamIterator<'a, S> {
     /// Wraps the provided listener,
-    pub fn new(listener: &'a dyn Listener<'a, S, Self>) -> Self {
+    pub fn new(listener: &'a mut dyn Listener<'a, S, Self>) -> Self {
         Self { listener }
     }
 }
@@ -55,7 +55,7 @@ mod adaptors {
     #[rustfmt::skip]
     impl<'a> Listener<'a, TcpStream, Incoming<'a>> for TcpListener {
         fn set_nonblocking(&self, nonblocking: bool) -> Result<()> { self.set_nonblocking(nonblocking) }
-        fn accept(&self) -> Result<(TcpStream, SocketAddr)> { self.accept() }
+        fn accept(&mut self) -> Result<(TcpStream, SocketAddr)> { self.accept() }
         fn incoming(&self) -> Incoming<'_> { self.incoming() }
     }
 }

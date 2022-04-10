@@ -1,9 +1,8 @@
 #![allow(clippy::type_complexity)]
 
 #[cfg(test)]
-pub mod test_utils;
+pub mod utils;
 
-use crate::test_utils::*;
 use core::panic;
 use httpfs::bullshit_scanner::BullshitScanner;
 use std::{
@@ -12,7 +11,7 @@ use std::{
     sync::{mpsc, Arc, Mutex},
     thread,
 };
-use test_utils::better_ureq::*;
+use utils::{better_ureq::*, *};
 
 // Global server factory for running tests in parallel
 lazy_static::lazy_static! {

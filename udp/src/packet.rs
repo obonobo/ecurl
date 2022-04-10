@@ -2,7 +2,7 @@
 //! assignment
 
 use std::fmt::Display;
-use std::io::{Error, ErrorKind, Read};
+use std::io::{Error, ErrorKind, Read, Write};
 use std::net::Ipv4Addr;
 
 /// The custom packet structure defined by the assignment requirements
@@ -28,6 +28,9 @@ impl Packet {
     /// The size of a packet with an empty data field
     pub const MIN_PACKET_SIZE: usize = 1 + 4 + 4 + 2; // 11
 
+    /// The size of a packet with a full data field
+    pub const MAX_PACKET_SIZE: usize = Self::MIN_PACKET_SIZE + Self::PACKET_DATA_CAPACITY;
+
     /// The maximum size of the data field of a packet
     pub const PACKET_DATA_CAPACITY: usize = 1014;
 
@@ -44,19 +47,41 @@ impl Packet {
             port: p.port,
             peer: p.peer,
             active: false,
-            buf: [0; Packet::PACKET_DATA_CAPACITY],
+            buf: data_buffer(),
         }
     }
 
     /// Serializes the entire packet to a byte buffer.
     pub fn raw(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(self.data.len() + Self::MIN_PACKET_SIZE);
-        buf.push(self.ptyp.into());
-        buf.append(&mut self.nseq.to_be_bytes().into());
-        buf.append(&mut self.peer.octets().into());
-        buf.append(&mut self.port.to_be_bytes().into());
-        buf.extend(self.data.iter());
+        let mut buf = vec![0; self.len()];
+        let n = self.write_to(&mut buf).unwrap_or(0);
+        buf.truncate(n); // should do nothing
         buf
+    }
+
+    pub fn write_to(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.len() > buf.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "buffer is too small to fit this packet",
+            ));
+        }
+
+        let mut n = 0;
+        n += (&mut buf[n..]).write(&[self.ptyp.into()])?;
+        n += (&mut buf[n..]).write(self.nseq.to_be_bytes().as_ref())?;
+        n += (&mut buf[n..]).write(self.peer.octets().as_ref())?;
+        n += (&mut buf[n..]).write(self.port.to_be_bytes().as_ref())?;
+        n += (&mut buf[n..]).write(self.data.as_ref())?;
+        Ok(n)
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len() + Self::MIN_PACKET_SIZE
+    }
+
+    pub fn is_empty(&self) -> bool {
+        false
     }
 
     /// Converts a buffer into a Packet. The reason why this is not an
@@ -351,6 +376,31 @@ mod tests {
         test_stream_chunking_size_1048576: 1048576,
     }
 
+    /// Tests that packet serialization and deserialization works as expected by
+    /// creating random packets then serializing and deserializing them
+    #[test]
+    fn test_packet_serialization() {
+        for packet in (0..100).map(|_| random_packet()) {
+            let packet2 = Packet::from(&packet.raw());
+            assert_eq!(packet, packet2);
+        }
+    }
+
+    /// Creates a [Packet] with randomized fields
+    fn random_packet() -> Packet {
+        let r = || thread_rng().gen();
+        Packet {
+            ptyp: thread_rng().gen_range(0..=5).into(),
+            nseq: thread_rng().gen(),
+            peer: Ipv4Addr::new(r(), r(), r(), r()),
+            port: thread_rng().gen(),
+            data: thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(Packet::PACKET_DATA_CAPACITY)
+                .collect(),
+        }
+    }
+
     fn default_peer() -> Ipv4Addr {
         Ipv4Addr::new(192, 168, 2, 1)
     }
@@ -375,5 +425,25 @@ mod tests {
                 ..Default::default()
             })
             .collect()
+    }
+}
+
+pub use packet_buffer::*;
+mod packet_buffer {
+    use super::Packet;
+
+    pub type PacketBuffer = [u8; Packet::MAX_PACKET_SIZE];
+    pub type PacketDataBuffer = [u8; Packet::PACKET_DATA_CAPACITY];
+
+    pub const fn buffer<const S: usize>() -> [u8; S] {
+        [0; S]
+    }
+
+    pub fn packet_buffer() -> PacketBuffer {
+        buffer::<{ Packet::MAX_PACKET_SIZE }>()
+    }
+
+    pub fn data_buffer() -> PacketDataBuffer {
+        buffer::<{ Packet::PACKET_DATA_CAPACITY }>()
     }
 }
