@@ -4,15 +4,33 @@
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 
-/// Mimicks [std::net::tcp::TcpListener]
-pub trait Listener<'a, S, I>
+/// Mimicks [std::net::tcp::TcpListener::incoming()]
+pub trait Incoming<'a, S, I>
 where
     S: Stream,
     I: Iterator<Item = io::Result<S>> + 'a,
 {
+    fn incoming(&'a mut self) -> I;
+}
+
+/// Mimicks [std::net::tcp::TcpListener]
+pub trait Listener<'a, S>
+where
+    S: Stream,
+{
     fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()>;
     fn accept(&mut self) -> io::Result<(S, SocketAddr)>;
-    fn incoming(&'a self) -> I;
+}
+
+// Blanket implementation. All Listeners implement Incoming automatically
+impl<'a, S, L> Incoming<'a, S, StreamIterator<'a, S>> for L
+where
+    S: Stream,
+    L: Listener<'a, S>,
+{
+    fn incoming(&'a mut self) -> StreamIterator<'a, S> {
+        StreamIterator { listener: self }
+    }
 }
 
 /// Mimicks [std::net::tcp::TcpStream]. Note that all [Streams](Stream) are also
@@ -24,12 +42,12 @@ pub trait Stream: Read + Write {
 /// A generic version of [std::net::tcp::Incoming] that works on any kind of
 /// [Listeners](Listener)
 pub struct StreamIterator<'a, S: Stream> {
-    listener: &'a mut dyn Listener<'a, S, Self>,
+    listener: &'a mut dyn Listener<'a, S>,
 }
 
 impl<'a, S: Stream> StreamIterator<'a, S> {
     /// Wraps the provided listener,
-    pub fn new(listener: &'a mut dyn Listener<'a, S, Self>) -> Self {
+    pub fn new(listener: &'a mut dyn Listener<'a, S>) -> Self {
         Self { listener }
     }
 }
@@ -41,21 +59,21 @@ impl<'a, S: Stream> Iterator for StreamIterator<'a, S> {
     }
 }
 
-/// Adaptors for [std::net::tcp]
+/// Adaptors for [std::net::tcp], contains implementations of our traits for the
+/// stdlib TCP package.
 mod adaptors {
     use super::{Listener, Stream};
     use std::io::Result;
-    use std::net::{Incoming, SocketAddr, TcpListener, TcpStream};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
 
+    // Delegates
     #[rustfmt::skip]
     impl Stream for TcpStream {
         fn peer_addr(&self) -> Result<SocketAddr> { self.peer_addr() }
     }
-
     #[rustfmt::skip]
-    impl<'a> Listener<'a, TcpStream, Incoming<'a>> for TcpListener {
+    impl<'a> Listener<'a, TcpStream> for TcpListener {
         fn set_nonblocking(&self, nonblocking: bool) -> Result<()> { self.set_nonblocking(nonblocking) }
-        fn accept(&mut self) -> Result<(TcpStream, SocketAddr)> { self.accept() }
-        fn incoming(&self) -> Incoming<'_> { self.incoming() }
+        fn accept(&mut self) -> Result<(TcpStream, SocketAddr)> { TcpListener::accept(self) }
     }
 }

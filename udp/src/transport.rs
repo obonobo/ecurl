@@ -6,7 +6,7 @@
 //! [std::net::tcp] package. Since this API will be used to implement HTTP, it
 //! needs to be easy to swap between the two transports.
 
-use crate::packet::{data_buffer, packet_buffer, Packet, PacketType};
+use crate::packet::{packet_buffer, Packet, PacketType};
 use crate::{Listener, Stream, StreamIterator};
 
 use std::io::{self, Error, ErrorKind, Read, Write};
@@ -14,6 +14,8 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
 use super::packet::PacketBuffer;
+
+pub const DEFAULT_TIMEOUT: u64 = 50;
 
 pub type UdpxIncoming<'a> = StreamIterator<'a, UdpxStream>;
 
@@ -28,14 +30,16 @@ pub struct UdpxListener {
 }
 
 impl UdpxListener {
-    pub const DEFAULT_TIMEOUT: u64 = 50;
-
     pub fn bind(addr: impl ToSocketAddrs) -> io::Result<UdpxListener> {
         Ok(Self {
             sock: UdpSocket::bind(addr)?,
             buf: packet_buffer(),
-            timeout: Self::DEFAULT_TIMEOUT,
+            timeout: DEFAULT_TIMEOUT,
         })
+    }
+
+    pub fn with_timeout(self, timeout: u64) -> Self {
+        Self { timeout, ..self }
     }
 
     /// Does a UDPx open connection handshake
@@ -72,7 +76,13 @@ impl UdpxListener {
 
         // Wait for the response - 5 tries
         let n = send.write_to(&mut self.buf[..])?;
-        let packet = reliable_send(&self.buf[..n], &self.sock, addr, self.timeout())?;
+        let packet = reliable_send(
+            &self.buf[..n],
+            &self.sock,
+            addr,
+            self.timeout(),
+            (PacketType::SynAck, PacketType::Syn),
+        )?;
 
         // This packet should be an ACK
         if packet.ptyp != PacketType::Ack {
@@ -102,7 +112,7 @@ impl UdpxListener {
     }
 }
 
-impl<'a> Listener<'a, UdpxStream, UdpxIncoming<'a>> for UdpxListener {
+impl<'a> Listener<'a, UdpxStream> for UdpxListener {
     fn set_nonblocking(&self, _: bool) -> io::Result<()> {
         todo!()
     }
@@ -119,11 +129,6 @@ impl<'a> Listener<'a, UdpxStream, UdpxIncoming<'a>> for UdpxListener {
 
         Ok((UdpxStream::new(self.sock.try_clone()?), addr))
     }
-
-    // Returns an iterator on the incoming connections
-    fn incoming(&'a self) -> UdpxIncoming<'_> {
-        todo!()
-    }
 }
 
 pub struct UdpxStream {
@@ -134,12 +139,17 @@ pub struct UdpxStream {
 }
 
 impl UdpxStream {
-    fn new(sock: UdpSocket) -> UdpxStream {
-        UdpxStream {
+    fn new(sock: UdpSocket) -> Self {
+        Self {
             sock,
+            timeout: DEFAULT_TIMEOUT,
             buf: packet_buffer(),
             remote: SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0),
         }
+    }
+
+    fn with_timeout(self, timeout: u64) -> Self {
+        Self { timeout, ..self }
     }
 
     /// Returns an error if the ip is not ipv4
@@ -160,16 +170,31 @@ impl UdpxStream {
             port: self.remote.port(),
             ..Default::default()
         };
-
         let n = packet.write_to(&mut self.buf[..])?;
         let syn_ack = reliable_send(
             &self.buf[..n],
             &self.sock,
             SocketAddr::V4(self.remote),
             self.timeout(),
-        );
+            (PacketType::Syn, PacketType::SynAck),
+        )?;
 
-        todo!()
+        // Send the ACK packet
+        let packet = Packet {
+            ptyp: PacketType::Ack,
+            nseq: syn_ack.nseq + 1,
+            peer: self.remote.ip().to_owned(),
+            port: self.remote.port(),
+            ..Default::default()
+        };
+        let n = packet.write_to(&mut self.buf[..])?;
+
+        // We will just send this packet without waiting for a response
+        self.sock
+            .send_to(&self.buf[..n], SocketAddr::V4(self.remote))?;
+
+        // Handshake is done!
+        Ok(self)
     }
 
     pub fn write_packet(&mut self, packet: &Packet) -> io::Result<()> {
@@ -229,6 +254,7 @@ pub fn reliable_send(
     sock: &UdpSocket,
     peer: SocketAddr,
     timeout: Duration,
+    packet_types: (PacketType, PacketType), // send/recv packet types
 ) -> io::Result<Packet> {
     let mut recv = packet_buffer();
     for _ in 0..5 {
@@ -243,6 +269,10 @@ pub fn reliable_send(
     }
     Err(Error::new(
         ErrorKind::TimedOut,
-        "timed out waiting for ACK to my SYN-ACK",
+        // "timed out waiting for ACK to my SYN-ACK",
+        format!(
+            "timed out waiting for {} response to my {} packet",
+            packet_types.1, packet_types.0
+        ),
     ))
 }
