@@ -1,4 +1,5 @@
 use clap::Parser;
+use udpx::logging;
 use std::{
     fmt::Display,
     io::{Error, ErrorKind},
@@ -57,6 +58,9 @@ pub fn run(args: impl IntoIterator<Item = String>) -> i32 {
             return exit;
         }
     };
-    println!("{}", cfg);
+    logging::init_logging(cfg.verbose);
+
+    println!("INFO: {}", cfg);
+
     EXIT_OKAY
 }

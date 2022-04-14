@@ -4,7 +4,7 @@
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 
-/// Mimicks [std::net::tcp::TcpListener::incoming()]
+/// Mimicks [std::net::tcp::Incoming]
 pub trait Incoming<'a, S, I>
 where
     S: Stream,
@@ -14,10 +14,7 @@ where
 }
 
 /// Mimicks [std::net::tcp::TcpListener]
-pub trait Listener<'a, S>
-where
-    S: Stream,
-{
+pub trait Listener<'a, S: Stream> {
     fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()>;
     fn accept(&mut self) -> io::Result<(S, SocketAddr)>;
 }

@@ -1,6 +1,6 @@
 use std::net::{SocketAddr, UdpSocket};
 
-use udp::{LOCALHOST, NINE_THOUSAND};
+use udpx::{LOCALHOST, NINE_THOUSAND};
 
 ///
 /// First we need to port our old client Rust

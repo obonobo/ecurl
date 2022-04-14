@@ -179,19 +179,15 @@ impl UdpxStream {
             (PacketType::Syn, PacketType::SynAck),
         )?;
 
-        // Send the ACK packet
-        let packet = Packet {
+        // Send the ACK packet. We will just send this packet without waiting
+        // for a response
+        self.write_packet(&Packet {
             ptyp: PacketType::Ack,
             nseq: syn_ack.nseq + 1,
             peer: self.remote.ip().to_owned(),
             port: self.remote.port(),
             ..Default::default()
-        };
-        let n = packet.write_to(&mut self.buf[..])?;
-
-        // We will just send this packet without waiting for a response
-        self.sock
-            .send_to(&self.buf[..n], SocketAddr::V4(self.remote))?;
+        })?;
 
         // Handshake is done!
         Ok(self)
