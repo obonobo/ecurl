@@ -43,9 +43,20 @@ impl UdpxListener {
         Self { timeout, ..self }
     }
 
-    /// Does a UDPx open connection handshake. Returns the response packet as
-    /// well as the starting sequence number for received data packets
-    fn handshake(&mut self, addr: SocketAddr, packet: &Packet) -> io::Result<(Packet, u32)> {
+    /// Does a UDPx open connection handshake. Returns the response packet, the
+    /// starting sequence number for future received data packets as well as the
+    /// negotiated [UdpSocket].
+    ///
+    /// The handshake spawns a new UdpSocket and sends the SYN-ACK from that new
+    /// address. Clients must send future messages to the remote address of the
+    /// SYN-ACK. The main [Listener] socket is only for accepting handshakes and
+    /// starting new connections - the rest of the conversation happens on the
+    /// dispatched socket.
+    fn handshake(
+        &mut self,
+        addr: SocketAddr,
+        packet: &Packet,
+    ) -> io::Result<(Packet, u32, UdpSocket)> {
         log::debug!("Server - Beginning handshake");
         if packet.ptyp != PacketType::Syn {
             return Err(io::Error::new(
@@ -77,23 +88,30 @@ impl UdpxListener {
             ..Default::default()
         };
 
-        // Send the SYN-ACK and wait for a response packet. It should be Ack,
-        // but if the Ack get's dropped, we will accept the next DATA packet as
+        // We need to create a new UdpSocket for our response - let the OS
+        // choose the port
+        let sock = UdpSocket::bind("localhost:0")?;
+
+        // Send the SYN-ACK and wait for a response packet. It should be ACK,
+        // but if the ACK get's dropped, we will accept the next DATA packet as
         // well
         let n = send.write_to(&mut self.buf[..])?;
-        let ack_or_data = reliable_send(
+        let (ack_or_data, remote) = reliable_send(
             &self.buf[..n],
-            &self.sock,
+            // &self.sock, // TODO: main socket, remove this once you have the dispatch working
+            &sock,
             addr,
             self.timeout(),
             PacketType::SynAck,
             &[PacketType::Ack, PacketType::Data],
+            true,
         )?;
 
         // This packet should be an ACK or DATA packet
+        sock.connect(remote)?;
         let nseq = packet.nseq + 3;
         match ack_or_data.ptyp {
-            PacketType::Data => Ok((ack_or_data, nseq)),
+            PacketType::Data => Ok((ack_or_data, nseq, sock)),
             PacketType::Ack => {
                 // If it's an ACK, check the seq number, otherwise return
                 if ack_or_data.nseq != packet.nseq + 2 {
@@ -105,15 +123,16 @@ impl UdpxListener {
                         packet.nseq + 2),
                     ))
                 } else {
-                    Ok((ack_or_data, nseq))
+                    Ok((ack_or_data, nseq, sock))
                 }
             }
             _ => Err(Error::new(
                 ErrorKind::Other,
-                format!(
-                    "{} packet has type {} but should be ACK",
-                    "received a non-ACK in response to my SYN-ACK, ", ack_or_data.ptyp,
-                ),
+                [
+                    "received a non-ACK in response to my SYN-ACK, ",
+                    &format!("packet has type {} but should be ACK", ack_or_data.ptyp),
+                ]
+                .join(""),
             )),
         }
     }
@@ -133,9 +152,10 @@ impl<'a> Listener<'a, UdpxStream> for UdpxListener {
         // Do a handshake
         let (n, addr) = self.sock.recv_from(&mut self.buf)?;
         let packet = Packet::try_from(&self.buf[..n])?;
-        self.handshake(addr, &packet)?;
+        let (packet, nseq, sock) = self.handshake(addr, &packet)?;
+        let stream = UdpxStream::new(sock, nseq).with_starting_data([packet]);
         log::debug!("handshake completed with addr {}", addr);
-        Ok((UdpxStream::new(self.sock.try_clone()?), addr))
+        Ok((stream, addr))
     }
 }
 
@@ -144,10 +164,21 @@ pub struct UdpxStream {
     buf: PacketBuffer,
     remote: SocketAddrV4,
     timeout: u64,
+    packets_received: Vec<Packet>,
+    packets_sent: Vec<Packet>,
+    next_nseq: u32,
 }
 
 impl UdpxStream {
-    fn new(sock: UdpSocket) -> Self {
+    /// The sequence number of the first DATA packet sent in a conversation
+    pub const FIRST_NSEQ: u32 = 4;
+
+    /// Returns an error if the ip is not ipv4
+    pub fn connect(addr: impl ToSocketAddrs) -> io::Result<UdpxStream> {
+        Self::new(Self::random_socket()?, Self::FIRST_NSEQ).handshake(addr)
+    }
+
+    fn new(sock: UdpSocket, nseq: u32) -> Self {
         let remote = sock
             .peer_addr()
             .and_then(|ip| match ip {
@@ -158,6 +189,7 @@ impl UdpxStream {
                         format!("not an ipv4 address ({})", addr),
                     );
                     log::error!("Bad remote addr: {}", err);
+                    log::error!("Using default addr as remote...");
                     Err(err)
                 }
             })
@@ -168,16 +200,28 @@ impl UdpxStream {
             timeout: DEFAULT_TIMEOUT,
             buf: packet_buffer(),
             remote,
+            next_nseq: nseq,
+            packets_received: Vec::with_capacity(32),
+            packets_sent: Vec::with_capacity(32),
         }
+    }
+
+    /// Used serverside to load initial data as received packets in some cases
+    fn load_initial_data_packets(mut self, initial_data: impl IntoIterator<Item = Packet>) -> Self {
+        self.packets_received.extend(initial_data.into_iter());
+        self
+    }
+
+    fn with_starting_data(self, initial_data: impl IntoIterator<Item = Packet>) -> Self {
+        self.load_initial_data_packets(
+            initial_data
+                .into_iter()
+                .filter(|p| p.ptyp == PacketType::Data),
+        )
     }
 
     fn with_timeout(self, timeout: u64) -> Self {
         Self { timeout, ..self }
-    }
-
-    /// Returns an error if the ip is not ipv4
-    pub fn connect(addr: impl ToSocketAddrs) -> io::Result<UdpxStream> {
-        Self::new(Self::random_socket()?).handshake(addr)
     }
 
     /// Performs the client side of the handshake
@@ -197,23 +241,29 @@ impl UdpxStream {
         };
         let n = packet.write_to(&mut self.buf[..])?;
 
-        log::debug!("Client - Initiating UDPx handshake");
-        let syn_ack = reliable_send(
+        log::debug!("Initiating UDPx handshake");
+        let (syn_ack, remote) = reliable_send(
             &self.buf[..n],
             &self.sock,
             SocketAddr::V4(self.remote),
             self.timeout(),
             PacketType::Syn,
             &[PacketType::SynAck],
+            false,
         )?;
+
         log::debug!(
-            "Client - Recieve SYN-ACK response from server: {:?}",
+            "Received SYN-ACK response from server (remote addr = {}): {:?}",
+            remote,
             syn_ack
         );
-        log::debug!("Client - Sending ACK packet to complete handshake");
+
+        log::debug!("Setting socket connection to {}", remote);
+        self.sock.connect(remote)?;
 
         // Send the ACK packet. We will just send this packet without waiting
         // for a response
+        log::debug!("Sending ACK packet to complete handshake");
         self.write_packet(&Packet {
             ptyp: PacketType::Ack,
             nseq: syn_ack.nseq + 1,
@@ -297,7 +347,8 @@ pub fn reliable_send(
     timeout: Duration,
     send_packet_type: PacketType,
     recv_packet_types: &[PacketType],
-) -> io::Result<Packet> {
+    skip_address_mismatch: bool,
+) -> io::Result<(Packet, SocketAddr)> {
     let mut recv = packet_buffer();
     let join = |packet_types: &[PacketType]| packet_types.iter().join(" or ");
     let joined = join(recv_packet_types);
@@ -313,9 +364,9 @@ pub fn reliable_send(
 
         sock.send_to(send, peer)?; // Resend the packet
         sock.set_read_timeout(Some(timeout))?;
-        let packet = match sock.recv_from(&mut recv) {
-            Ok((_, addrr)) if addrr != peer => continue,
-            Ok((n, _)) => Packet::try_from(&recv[..n]),
+        let (packet, remote) = match sock.recv_from(&mut recv) {
+            Ok((_, addrr)) if skip_address_mismatch && addrr != peer => continue,
+            Ok((n, addrr)) => Packet::try_from(&recv[..n]).map(|p| (p, addrr)),
             Err(e) if e.kind() == ErrorKind::TimedOut => continue,
             Err(e) => return Err(e),
         }?;
@@ -326,7 +377,7 @@ pub fn reliable_send(
             continue;
         }
 
-        return Ok(packet);
+        return Ok((packet, remote));
     }
 
     Err(if !invalid_response_packets.is_empty() {
