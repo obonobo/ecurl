@@ -143,10 +143,10 @@ struct ServerRunner {
 }
 
 impl ServerRunner {
-    fn serve<'a, S, L, B>(&self) -> Result<Handle, ServerError>
+    fn serve<S, L, B>(&self) -> Result<Handle, ServerError>
     where
-        S: Stream + Send + Sync + 'static,
-        L: Listener<S> + Send + Sync + 'static,
+        S: Stream + Send + 'static,
+        L: Listener<S> + Send + 'static,
         B: Bindable<S, L>,
     {
         let addr = self.addr_str();
@@ -162,51 +162,41 @@ impl ServerRunner {
         // Spin up a request handler loop in a new thread
         let (handlec, threadsc, dirc) = (handle.clone(), self.threads.clone(), self.dir.clone());
         handle.set_main(thread::spawn(move || {
-            let mut listener = listener;
-            // let (stream, _) = listener.accept().unwrap();
-            // thread::spawn(move || {
-            //     println!("{}", stream.peer_addr().unwrap());
-            // });
+            for stream in listener.incoming() {
+                let stream = match stream {
+                    Ok(stream) => stream,
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // Poll the handle exit flag
+                        if handlec.exit.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                    Err(_) => break,
+                };
 
-            let stream = listener.accept();
-            // let listenerr: &'static L = &listener;
-            let incoming = listener.incoming();
+                log::debug!(
+                    "Connection established with {}",
+                    stream
+                        .peer_addr()
+                        .ok()
+                        .map(|addr| format!("{}", addr))
+                        .unwrap_or_else(|| String::from("..."))
+                );
 
-            // for stream in listener.incoming() {
-            // let stream = match stream {
-            //     Ok(stream) => stream,
-            //     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-            //         // Poll the handle exit flag
-            //         if handlec.exit.load(Ordering::SeqCst) {
-            //             break;
-            //         }
-            //         thread::sleep(Duration::from_millis(1));
-            //         continue;
-            //     }
-            //     Err(_) => break,
-            // };
-
-            // log::debug!(
-            //     "Connection established with {}",
-            //     stream
-            //         .peer_addr()
-            //         .ok()
-            //         .map(|addr| format!("{}", addr))
-            //         .unwrap_or_else(|| String::from("..."))
-            // );
-
-            // let dir = dirc.clone();
-            // threadsc.lock().unwrap().execute(move || {
-            //     let mut stream = stream;
-            //     match handle_connection(&mut stream, &dir) {
-            //         Ok(_) => {}
-            //         Err(e) => {
-            //             log::info!("{}", e);
-            //             write_500(&mut stream, &format!("{}", e));
-            //         }
-            //     };
-            // })
-            // }
+                let dir = dirc.clone();
+                threadsc.lock().unwrap().execute(move || {
+                    let mut stream = stream;
+                    match handle_connection(&mut stream, &dir) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::info!("{}", e);
+                            write_500(&mut stream, &format!("{}", e));
+                        }
+                    };
+                })
+            }
 
             // Join the request threads
             threadsc.lock().unwrap().join();
