@@ -19,6 +19,7 @@ use crate::{
     errors::ServerError,
     html::template,
     parse::{parse_http_request, Method, Request},
+    Bindable, Incoming, Listener, Stream,
 };
 
 /// 1MB
@@ -37,14 +38,27 @@ impl Server {
     pub const DEFAULT_DIR: &'static str = "./";
     pub const DEFAULT_NUM_THREADS: usize = 4;
 
-    pub fn serve(self) -> Result<Handle, ServerError> {
+    /// Spins up a server with the configuration specified by the [Server]
+    /// struct. This method may be called multiple times to produce multiple
+    /// server instances.
+    ///
+    /// Specify which kind of [Listener] you want to use to service requests.
+    /// Possible values for this type are
+    /// [UdpxListener](crate::transport::UdpxListener) or
+    /// [std::net::tcp::TcpListener]
+    pub fn serve<'a, S, L, B>(&self) -> Result<Handle, ServerError>
+    where
+        S: Stream + Send + Sync + 'static,
+        L: Listener<'a, S> + Send + Sync + 'static,
+        B: Bindable<'a, S, L>,
+    {
         ServerRunner {
             addr: self.addr,
-            dir: self.dir,
+            dir: self.dir.clone(),
             port: self.port,
             threads: Arc::new(Mutex::new(ThreadPool::new(self.n_workers))),
         }
-        .serve()
+        .serve::<S, L, B>()
     }
 }
 
@@ -129,11 +143,16 @@ struct ServerRunner {
 }
 
 impl ServerRunner {
-    fn serve(&self) -> Result<Handle, ServerError> {
+    fn serve<'a, S, L, B>(&self) -> Result<Handle, ServerError>
+    where
+        S: Stream + Send + Sync + 'static,
+        L: Listener<'a, S> + Send + Sync + 'static,
+        B: Bindable<'a, S, L>,
+    {
         let addr = self.addr_str();
         log::info!("Starting server on {}", addr);
 
-        let listener = TcpListener::bind(addr).map_err(wrap)?;
+        let listener = B::bind(addr).map_err(wrap)?;
         listener
             .set_nonblocking(true)
             .map_err(ServerError::wrap_err)?;
@@ -143,40 +162,50 @@ impl ServerRunner {
         // Spin up a request handler loop in a new thread
         let (handlec, threadsc, dirc) = (handle.clone(), self.threads.clone(), self.dir.clone());
         handle.set_main(thread::spawn(move || {
-            for stream in listener.incoming() {
-                let mut stream = match stream {
-                    Ok(stream) => stream,
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        // Poll the handle exit flag
-                        if handlec.exit.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(1));
-                        continue;
-                    }
-                    Err(_) => break,
-                };
+            let mut listener = listener;
+            // let (stream, _) = listener.accept().unwrap();
+            // thread::spawn(move || {
+            //     println!("{}", stream.peer_addr().unwrap());
+            // });
 
-                log::debug!(
-                    "Connection established with {}",
-                    stream
-                        .peer_addr()
-                        .ok()
-                        .map(|addr| format!("{}", addr))
-                        .unwrap_or_else(|| String::from("..."))
-                );
+            let stream = listener.accept();
+            // let incoming = listener.incoming();
 
-                let dir = dirc.clone();
-                threadsc.lock().unwrap().execute(move || {
-                    match handle_connection(&mut stream, &dir) {
-                        Ok(_) => {}
-                        Err(e) => {
-                            log::info!("{}", e);
-                            write_500(&mut stream, &format!("{}", e));
-                        }
-                    };
-                })
-            }
+            // for stream in listener.incoming() {
+            // let stream = match stream {
+            //     Ok(stream) => stream,
+            //     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            //         // Poll the handle exit flag
+            //         if handlec.exit.load(Ordering::SeqCst) {
+            //             break;
+            //         }
+            //         thread::sleep(Duration::from_millis(1));
+            //         continue;
+            //     }
+            //     Err(_) => break,
+            // };
+
+            // log::debug!(
+            //     "Connection established with {}",
+            //     stream
+            //         .peer_addr()
+            //         .ok()
+            //         .map(|addr| format!("{}", addr))
+            //         .unwrap_or_else(|| String::from("..."))
+            // );
+
+            // let dir = dirc.clone();
+            // threadsc.lock().unwrap().execute(move || {
+            //     let mut stream = stream;
+            //     match handle_connection(&mut stream, &dir) {
+            //         Ok(_) => {}
+            //         Err(e) => {
+            //             log::info!("{}", e);
+            //             write_500(&mut stream, &format!("{}", e));
+            //         }
+            //     };
+            // })
+            // }
 
             // Join the request threads
             threadsc.lock().unwrap().join();
@@ -191,7 +220,7 @@ impl ServerRunner {
 }
 
 /// Routes requests to the appropriate handler
-fn handle_connection(stream: &mut TcpStream, dir: &str) -> Result<(), ServerError> {
+fn handle_connection<S: Stream>(stream: &mut S, dir: &str) -> Result<(), ServerError> {
     // let mut reader = BufReader::with_capacity(BUFSIZE, stream.as_ref());
     let scnr = BullshitScanner::new(stream);
     let mut req = parse_http_request(scnr)?;
@@ -206,7 +235,7 @@ fn handle_connection(stream: &mut TcpStream, dir: &str) -> Result<(), ServerErro
         },
         Requested::Upload(filename) => {
             accept_file_upload(&filename, &mut req.body)?;
-            write_response::<File>(stream, "201 Created", 0, "", None)
+            write_response::<File, S>(stream, "201 Created", 0, "", None)
         }
         Requested::None => write_404(stream, filename, dir),
         Requested::NotAllowed(filename) => write_not_allowed(stream, &filename, dir),
@@ -299,7 +328,7 @@ fn accept_file_upload(filename: &str, body: &mut dyn Read) -> Result<(), ServerE
     std::io::copy(body, &mut fh).map(|_| ()).map_err(wrap)
 }
 
-fn write_dir_listing(stream: &mut TcpStream, dir: &str) -> Result<(), ServerError> {
+fn write_dir_listing<S: Stream>(stream: &mut S, dir: &str) -> Result<(), ServerError> {
     log::debug!("Listing directory {}", dir);
 
     // Gather a list of files and inject it into the template
@@ -333,8 +362,8 @@ fn open_file(file: &str) -> Result<(String, File), ServerError> {
     Ok((String::from(file), fh))
 }
 
-fn write_response_with_headers(
-    stream: &mut TcpStream,
+fn write_response_with_headers<S: Stream>(
+    stream: &mut S,
     status: &str,
     body_length: u64,
     headers: Option<HashMap<&str, &str>>,
@@ -375,8 +404,8 @@ fn write_response_with_headers(
 }
 
 /// Writes a response to the stream
-fn write_response<R: Read>(
-    stream: &mut TcpStream,
+fn write_response<R: Read, S: Stream>(
+    stream: &mut S,
     status: &str,
     body_length: u64,
     content_type: &str,
@@ -396,7 +425,7 @@ fn wrap<E: std::error::Error + 'static>(err: E) -> ServerError {
 }
 
 /// Writes a file response
-fn write_file(stream: &mut TcpStream, mut fh: File, filename: &str) -> Result<(), ServerError> {
+fn write_file<S: Stream>(stream: &mut S, mut fh: File, filename: &str) -> Result<(), ServerError> {
     write_response_with_headers(
         stream,
         "200 OK",
@@ -415,7 +444,7 @@ fn write_file(stream: &mut TcpStream, mut fh: File, filename: &str) -> Result<()
     )
 }
 
-fn write_500(stream: &mut TcpStream, msg: &str) {
+fn write_500<S: Stream>(stream: &mut S, msg: &str) {
     if let Err(e) = write_response(
         stream,
         "500 Internal Server Error",
@@ -428,7 +457,7 @@ fn write_500(stream: &mut TcpStream, msg: &str) {
 }
 
 /// Writes a '404 Not Found' response
-fn write_404(stream: &mut TcpStream, filename: &str, dir: &str) -> Result<(), ServerError> {
+fn write_404<S: Stream>(stream: &mut S, filename: &str, dir: &str) -> Result<(), ServerError> {
     let body = format!(
         "File '{}' could not be found on the server (directory being served is {})\n",
         filename, dir
@@ -455,7 +484,11 @@ fn abs_path(file: &str) -> String {
         .unwrap_or_else(|| String::from(file))
 }
 
-fn write_not_allowed(stream: &mut TcpStream, filename: &str, dir: &str) -> Result<(), ServerError> {
+fn write_not_allowed<S: Stream>(
+    stream: &mut S,
+    filename: &str,
+    dir: &str,
+) -> Result<(), ServerError> {
     let body = format!(
         concat!(
             "File '{}' is located outside the directory that is being served\r\n\r\n",

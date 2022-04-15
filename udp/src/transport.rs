@@ -8,7 +8,7 @@
 
 use crate::packet::{packet_buffer, Packet, PacketType};
 use crate::util::random_udp_socket_addr;
-use crate::{Listener, Stream, StreamIterator};
+use crate::{Bindable, Listener, Stream, StreamIterator};
 
 use std::fmt::Display;
 use std::io::{self, Error, ErrorKind, Read, Write};
@@ -19,7 +19,7 @@ use super::packet::PacketBuffer;
 
 pub const DEFAULT_TIMEOUT: u64 = 50;
 
-pub type UdpxIncoming<'a> = StreamIterator<'a, UdpxStream>;
+pub type UdpxIncoming<'a> = StreamIterator<'a, UdpxStream, UdpxListener>;
 
 pub struct UdpxListener {
     /// Dispatch socket or completing handshakes. After performing the
@@ -34,15 +34,17 @@ pub struct UdpxListener {
     timeout: u64,
 }
 
-impl UdpxListener {
-    pub fn bind(addr: impl ToSocketAddrs) -> io::Result<UdpxListener> {
+impl<'a> Bindable<'a, UdpxStream, Self> for UdpxListener {
+    fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
         Ok(Self {
             sock: UdpSocket::bind(addr)?,
             buf: packet_buffer(),
             timeout: DEFAULT_TIMEOUT,
         })
     }
+}
 
+impl UdpxListener {
     pub fn with_timeout(self, timeout: u64) -> Self {
         Self { timeout, ..self }
     }

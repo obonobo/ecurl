@@ -1,6 +1,7 @@
 use udpx::transport::UdpxListener;
 use udpx::util::config::err_to_exit_code;
 use udpx::util::constants::EXIT_OKAY;
+use udpx::Bindable;
 use udpx::Incoming;
 use udpx::Stream;
 

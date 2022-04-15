@@ -2,13 +2,20 @@
 //! ease
 
 use std::io::{self, Read, Write};
-use std::net::SocketAddr;
+use std::marker::PhantomData;
+use std::net::{SocketAddr, ToSocketAddrs};
+
+/// A factory method for creating [Listeners](Listener)
+pub trait Bindable<'a, S: Stream, L: Listener<'a, S>> {
+    /// Binds to the specified address and listens for incoming connections
+    fn bind(addr: impl ToSocketAddrs) -> io::Result<L>;
+}
 
 /// Mimicks [std::net::tcp::Incoming]
 pub trait Incoming<'a, S, I>
 where
     S: Stream,
-    I: Iterator<Item = io::Result<S>> + 'a,
+    I: Iterator<Item = io::Result<S>>,
 {
     fn incoming(&'a mut self) -> I;
 }
@@ -20,13 +27,13 @@ pub trait Listener<'a, S: Stream> {
 }
 
 // Blanket implementation. All Listeners implement Incoming automatically
-impl<'a, S, L> Incoming<'a, S, StreamIterator<'a, S>> for L
+impl<'a, S, L> Incoming<'a, S, StreamIterator<'a, S, L>> for L
 where
     S: Stream,
     L: Listener<'a, S>,
 {
-    fn incoming(&'a mut self) -> StreamIterator<'a, S> {
-        StreamIterator { listener: self }
+    fn incoming(&'a mut self) -> StreamIterator<'a, S, L> {
+        StreamIterator::new(self)
     }
 }
 
@@ -38,19 +45,24 @@ pub trait Stream: Read + Write {
 
 /// A generic version of [std::net::tcp::Incoming] that works on any kind of
 /// [Listeners](Listener)
-pub struct StreamIterator<'a, S: Stream> {
-    listener: &'a mut dyn Listener<'a, S>,
+pub struct StreamIterator<'a, S: Stream, L: Listener<'a, S>> {
+    listener: &'a mut L,
+    _s: PhantomData<S>, // This is ridiculous
 }
 
-impl<'a, S: Stream> StreamIterator<'a, S> {
+impl<'a, S: Stream, L: Listener<'a, S>> StreamIterator<'a, S, L> {
     /// Wraps the provided listener,
-    pub fn new(listener: &'a mut dyn Listener<'a, S>) -> Self {
-        Self { listener }
+    pub fn new(listener: &'a mut L) -> Self {
+        Self {
+            listener,
+            _s: PhantomData,
+        }
     }
 }
 
-impl<'a, S: Stream> Iterator for StreamIterator<'a, S> {
+impl<'a, S: Stream, L: Listener<'a, S>> Iterator for StreamIterator<'a, S, L> {
     type Item = io::Result<S>;
+
     fn next(&mut self) -> Option<Self::Item> {
         Some(self.listener.accept().map(|p| p.0))
     }
@@ -59,11 +71,16 @@ impl<'a, S: Stream> Iterator for StreamIterator<'a, S> {
 /// Adaptors for [std::net::tcp], contains implementations of our traits for the
 /// stdlib TCP package.
 mod adaptors {
-    use super::{Listener, Stream};
-    use std::io::Result;
+    use super::{Bindable, Listener, Stream};
+    use std::io::{self, Result};
     use std::net::{SocketAddr, TcpListener, TcpStream};
 
     // Delegates
+    impl<'a> Bindable<'a, TcpStream, Self> for TcpListener {
+        fn bind(addr: impl std::net::ToSocketAddrs) -> io::Result<Self> {
+            TcpListener::bind(addr)
+        }
+    }
     impl Stream for TcpStream {
         fn peer_addr(&self) -> Result<SocketAddr> {
             self.peer_addr()
