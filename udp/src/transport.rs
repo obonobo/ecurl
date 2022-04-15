@@ -19,7 +19,7 @@ use super::packet::PacketBuffer;
 
 pub const DEFAULT_TIMEOUT: u64 = 50;
 
-pub type UdpxIncoming<'a> = StreamIterator<'a, UdpxStream, UdpxListener>;
+pub type UdpxIncoming<'a> = StreamIterator<UdpxStream, UdpxListener>;
 
 pub struct UdpxListener {
     /// Dispatch socket or completing handshakes. After performing the
@@ -34,7 +34,7 @@ pub struct UdpxListener {
     timeout: u64,
 }
 
-impl<'a> Bindable<'a, UdpxStream, Self> for UdpxListener {
+impl Bindable<UdpxStream, Self> for UdpxListener {
     fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
         Ok(Self {
             sock: UdpSocket::bind(addr)?,
@@ -152,7 +152,7 @@ impl UdpxListener {
     }
 }
 
-impl<'a> Listener<'a, UdpxStream> for UdpxListener {
+impl Listener<UdpxStream> for UdpxListener {
     // TODO: This function needs to set the underlying UDP socket of the server
     // to be nonblocking. Remember that this socket is the one accepting
     // connections.

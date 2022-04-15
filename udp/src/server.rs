@@ -49,8 +49,8 @@ impl Server {
     pub fn serve<'a, S, L, B>(&self) -> Result<Handle, ServerError>
     where
         S: Stream + Send + Sync + 'static,
-        L: Listener<'a, S> + Send + Sync + 'static,
-        B: Bindable<'a, S, L>,
+        L: Listener<S> + Send + Sync + 'static,
+        B: Bindable<S, L>,
     {
         ServerRunner {
             addr: self.addr,
@@ -146,8 +146,8 @@ impl ServerRunner {
     fn serve<'a, S, L, B>(&self) -> Result<Handle, ServerError>
     where
         S: Stream + Send + Sync + 'static,
-        L: Listener<'a, S> + Send + Sync + 'static,
-        B: Bindable<'a, S, L>,
+        L: Listener<S> + Send + Sync + 'static,
+        B: Bindable<S, L>,
     {
         let addr = self.addr_str();
         log::info!("Starting server on {}", addr);
@@ -169,7 +169,8 @@ impl ServerRunner {
             // });
 
             let stream = listener.accept();
-            // let incoming = listener.incoming();
+            // let listenerr: &'static L = &listener;
+            let incoming = listener.incoming();
 
             // for stream in listener.incoming() {
             // let stream = match stream {
