@@ -84,13 +84,17 @@ impl UdpxListener {
                 Ipv4Addr::new(127, 0, 0, 1)
             },
 
-            port: packet.port,
+            port: addr.port(),
             ..Default::default()
         };
 
         // We need to create a new UdpSocket for our response - let the OS
         // choose the port
         let sock = UdpSocket::bind("localhost:0")?;
+        log::debug!(
+            "Dispatching to new UDP socket for the rest of the conversation, new socket = {}",
+            sock.local_addr()?
+        );
 
         // Send the SYN-ACK and wait for a response packet. It should be ACK,
         // but if the ACK get's dropped, we will accept the next DATA packet as
@@ -259,7 +263,7 @@ impl UdpxStream {
             syn_ack
         );
 
-        log::debug!("Setting socket connection to {}", remote);
+        log::debug!("Setting socket remote peer to {}", remote);
         self.remote = to_ipv4(remote)?;
         self.sock.connect(remote)?;
 
@@ -362,8 +366,12 @@ pub fn reliable_send(
 
     for i in 0..5 {
         log::debug!(
-            "Attempt #{}, sending {} packet, waiting for packets of type {}",
-            i,
+            "{}Sending {} packet, waiting for packets of type {}",
+            if i > 0 {
+                format!("(Attempt #{}) ", i)
+            } else {
+                String::new()
+            },
             send_packet_type,
             joined,
         );
