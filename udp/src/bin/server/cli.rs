@@ -10,7 +10,7 @@ udpx::cli_binary!(ServerConfig, |_: ServerConfig| -> Result<i32, i32> {
     for stream in listener.incoming() {
         let stream = stream.map_err(err())?;
         log::info!(
-            "Server: Made a connection with {}",
+            "Made a connection with {}",
             stream.peer_addr().map_err(err())?
         );
     }

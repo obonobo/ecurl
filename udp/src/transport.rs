@@ -9,6 +9,7 @@
 use crate::packet::{packet_buffer, Packet, PacketType};
 use crate::{Listener, Stream, StreamIterator};
 
+use std::fmt::Display;
 use std::io::{self, Error, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
@@ -42,8 +43,9 @@ impl UdpxListener {
         Self { timeout, ..self }
     }
 
-    /// Does a UDPx open connection handshake
-    fn handshake(&mut self, addr: SocketAddr, packet: &Packet) -> io::Result<()> {
+    /// Does a UDPx open connection handshake. Returns the response packet as
+    /// well as the starting sequence number for received data packets
+    fn handshake(&mut self, addr: SocketAddr, packet: &Packet) -> io::Result<(Packet, u32)> {
         log::debug!("Server - Beginning handshake");
         if packet.ptyp != PacketType::Syn {
             return Err(io::Error::new(
@@ -75,37 +77,45 @@ impl UdpxListener {
             ..Default::default()
         };
 
-        // Wait for the response - 5 tries
+        // Send the SYN-ACK and wait for a response packet. It should be Ack,
+        // but if the Ack get's dropped, we will accept the next DATA packet as
+        // well
         let n = send.write_to(&mut self.buf[..])?;
-        let packett = reliable_send(
+        let ack_or_data = reliable_send(
             &self.buf[..n],
             &self.sock,
             addr,
             self.timeout(),
-            (PacketType::SynAck, PacketType::Ack),
+            PacketType::SynAck,
+            &[PacketType::Ack, PacketType::Data],
         )?;
 
-        // This packet should be an ACK
-        if packett.ptyp != PacketType::Ack {
-            return Err(Error::new(
+        // This packet should be an ACK or DATA packet
+        let nseq = packet.nseq + 3;
+        match ack_or_data.ptyp {
+            PacketType::Data => Ok((ack_or_data, nseq)),
+            PacketType::Ack => {
+                // If it's an ACK, check the seq number, otherwise return
+                if ack_or_data.nseq != packet.nseq + 2 {
+                    Err(Error::new(
+                        ErrorKind::Other,
+                        format!(
+                        "bad sequence number on ACK response to SYN-ACK, got {} but expected {}",
+                        ack_or_data.nseq,
+                        packet.nseq + 2),
+                    ))
+                } else {
+                    Ok((ack_or_data, nseq))
+                }
+            }
+            _ => Err(Error::new(
                 ErrorKind::Other,
                 format!(
                     "{} packet has type {} but should be ACK",
-                    "received a non-ACK in response to my SYN-ACK, ", packett.ptyp,
+                    "received a non-ACK in response to my SYN-ACK, ", ack_or_data.ptyp,
                 ),
-            ));
-        } else if packett.nseq != packet.nseq + 2 {
-            return Err(Error::new(
-                ErrorKind::Other,
-                format!(
-                    "bad sequence number on ACK response to SYN-ACK, got {} but expected {}",
-                    packett.nseq,
-                    packet.nseq + 2
-                ),
-            ));
+            )),
         }
-
-        Ok(())
     }
 
     fn timeout(&self) -> Duration {
@@ -124,10 +134,7 @@ impl<'a> Listener<'a, UdpxStream> for UdpxListener {
         let (n, addr) = self.sock.recv_from(&mut self.buf)?;
         let packet = Packet::try_from(&self.buf[..n])?;
         self.handshake(addr, &packet)?;
-
-        // TODO: debug
-        eprintln!("DEBUG: handshake completed with addr {}", addr);
-
+        log::debug!("handshake completed with addr {}", addr);
         Ok((UdpxStream::new(self.sock.try_clone()?), addr))
     }
 }
@@ -141,11 +148,26 @@ pub struct UdpxStream {
 
 impl UdpxStream {
     fn new(sock: UdpSocket) -> Self {
+        let remote = sock
+            .peer_addr()
+            .and_then(|ip| match ip {
+                SocketAddr::V4(addr) => Ok(addr),
+                SocketAddr::V6(addr) => {
+                    let err = io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("not an ipv4 address ({})", addr),
+                    );
+                    log::error!("Bad remote addr: {}", err);
+                    Err(err)
+                }
+            })
+            .unwrap_or_else(|_| SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0));
+
         Self {
             sock,
             timeout: DEFAULT_TIMEOUT,
             buf: packet_buffer(),
-            remote: SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0),
+            remote,
         }
     }
 
@@ -181,7 +203,8 @@ impl UdpxStream {
             &self.sock,
             SocketAddr::V4(self.remote),
             self.timeout(),
-            (PacketType::Syn, PacketType::SynAck),
+            PacketType::Syn,
+            &[PacketType::SynAck],
         )?;
         log::debug!(
             "Client - Recieve SYN-ACK response from server: {:?}",
@@ -253,6 +276,18 @@ pub fn to_ipv4(addr: impl ToSocketAddrs) -> io::Result<SocketAddrV4> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "only ipv4 addresses are supported"))
 }
 
+/// An extensions to [Iterator] that allows you to join anything with a
+/// [ToString]
+pub trait JoinIter {
+    fn join(self, sep: &str) -> String;
+}
+
+impl<T: Display, I: Iterator<Item = T>> JoinIter for I {
+    fn join(self, sep: &str) -> String {
+        self.map(|e| e.to_string()).collect::<Vec<_>>().join(sep)
+    }
+}
+
 /// Sends a packet (potentially multiple times) in a loop with a timeout and
 /// waits for the response. Used for handshakes.
 pub fn reliable_send(
@@ -260,32 +295,60 @@ pub fn reliable_send(
     sock: &UdpSocket,
     peer: SocketAddr,
     timeout: Duration,
-    packet_types: (PacketType, PacketType), // send/recv packet types
+    send_packet_type: PacketType,
+    recv_packet_types: &[PacketType],
 ) -> io::Result<Packet> {
     let mut recv = packet_buffer();
+    let join = |packet_types: &[PacketType]| packet_types.iter().join(" or ");
+    let joined = join(recv_packet_types);
+    let mut invalid_response_packets = Vec::with_capacity(5);
+
     for i in 0..5 {
         log::debug!(
-            "Try {}, sending {} packet, waiting for {} packet",
+            "Attempt #{}, sending {} packet, waiting for packets of type {}",
             i,
-            packet_types.0,
-            packet_types.1
+            send_packet_type,
+            joined,
         );
 
         sock.send_to(send, peer)?; // Resend the packet
         sock.set_read_timeout(Some(timeout))?;
-        return match sock.recv_from(&mut recv) {
+        let packet = match sock.recv_from(&mut recv) {
             Ok((_, addrr)) if addrr != peer => continue,
             Ok((n, _)) => Packet::try_from(&recv[..n]),
             Err(e) if e.kind() == ErrorKind::TimedOut => continue,
             Err(e) => return Err(e),
-        };
+        }?;
+
+        // Check that the packet is of (one of) the types that we expect
+        if !recv_packet_types.iter().any(|t| packet.ptyp == *t) {
+            invalid_response_packets.push(packet.ptyp);
+            continue;
+        }
+
+        return Ok(packet);
     }
-    Err(Error::new(
-        ErrorKind::TimedOut,
-        // "timed out waiting for ACK to my SYN-ACK",
-        format!(
-            "timed out waiting for {} response to my {} packet",
-            packet_types.1, packet_types.0
-        ),
-    ))
+
+    Err(if !invalid_response_packets.is_empty() {
+        Error::new(
+            ErrorKind::Other,
+            [
+                "invalid response packets, expected to receive a packet of one of these types:",
+                &format!(
+                    "{}, but received only the following packets: {}",
+                    joined,
+                    join(&invalid_response_packets)
+                ),
+            ]
+            .join(""),
+        )
+    } else {
+        Error::new(
+            ErrorKind::TimedOut,
+            format!(
+                "timed out waiting for valid response: send_packet={}, recv_packet={}",
+                send_packet_type, joined
+            ),
+        )
+    })
 }
