@@ -1,5 +1,14 @@
 //! A package for configuring logging, used in both the client and the server
 
+pub use funcs::*;
+mod funcs {
+    use crate::{ANY_PORT, LOCALHOST};
+
+    pub fn random_udp_socket_addr() -> String {
+        format!("{}:{}", LOCALHOST, ANY_PORT)
+    }
+}
+
 /// Code for Client and Server CLIs
 pub mod config {
     use super::constants::*;

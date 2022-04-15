@@ -7,6 +7,7 @@
 //! needs to be easy to swap between the two transports.
 
 use crate::packet::{packet_buffer, Packet, PacketType};
+use crate::util::random_udp_socket_addr;
 use crate::{Listener, Stream, StreamIterator};
 
 use std::fmt::Display;
@@ -296,7 +297,7 @@ impl UdpxStream {
 
     /// Binds to a random UDP socket for the client to use
     pub fn random_socket() -> io::Result<UdpSocket> {
-        UdpSocket::bind(super::random_udp_socket_addr())
+        UdpSocket::bind(random_udp_socket_addr())
     }
 
     fn timeout(&self) -> Duration {
