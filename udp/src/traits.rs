@@ -64,13 +64,17 @@ mod adaptors {
     use std::net::{SocketAddr, TcpListener, TcpStream};
 
     // Delegates
-    #[rustfmt::skip]
     impl Stream for TcpStream {
-        fn peer_addr(&self) -> Result<SocketAddr> { self.peer_addr() }
+        fn peer_addr(&self) -> Result<SocketAddr> {
+            self.peer_addr()
+        }
     }
-    #[rustfmt::skip]
     impl<'a> Listener<'a, TcpStream> for TcpListener {
-        fn set_nonblocking(&self, nonblocking: bool) -> Result<()> { self.set_nonblocking(nonblocking) }
-        fn accept(&mut self) -> Result<(TcpStream, SocketAddr)> { TcpListener::accept(self) }
+        fn set_nonblocking(&self, nonblocking: bool) -> Result<()> {
+            self.set_nonblocking(nonblocking)
+        }
+        fn accept(&mut self) -> Result<(TcpStream, SocketAddr)> {
+            TcpListener::accept(self)
+        }
     }
 }

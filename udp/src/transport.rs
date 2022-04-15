@@ -21,6 +21,9 @@ pub const DEFAULT_TIMEOUT: u64 = 50;
 pub type UdpxIncoming<'a> = StreamIterator<'a, UdpxStream>;
 
 pub struct UdpxListener {
+    /// Dispatch socket or completing handshakes. After performing the
+    /// handshake, the listener will bind a new socket for the rest of the
+    /// conversation, leaving this socket free to accept more connections.
     sock: UdpSocket,
 
     /// Buffer for handshaking
@@ -147,6 +150,9 @@ impl UdpxListener {
 }
 
 impl<'a> Listener<'a, UdpxStream> for UdpxListener {
+    // TODO: This function needs to set the underlying UDP socket of the server
+    // to be nonblocking. Remember that this socket is the one accepting
+    // connections.
     fn set_nonblocking(&self, _: bool) -> io::Result<()> {
         todo!()
     }
