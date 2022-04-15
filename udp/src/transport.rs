@@ -57,7 +57,7 @@ impl UdpxListener {
         addr: SocketAddr,
         packet: &Packet,
     ) -> io::Result<(Packet, u32, UdpSocket)> {
-        log::debug!("Server - Beginning handshake");
+        log::debug!("Beginning handshake with {}", addr);
         if packet.ptyp != PacketType::Syn {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -226,26 +226,27 @@ impl UdpxStream {
 
     /// Performs the client side of the handshake
     fn handshake(mut self, addr: impl ToSocketAddrs) -> io::Result<Self> {
-        log::debug!("Client - Initiating UDPx handshake");
-
-        self.remote = to_ipv4(addr)?;
-        self.sock.connect(self.remote)?;
+        let addr = to_ipv4(addr)?;
+        log::debug!(
+            "Initiating UDPx handshake with {}, local_addr = {}",
+            addr,
+            self.sock.local_addr()?
+        );
 
         // Send the SYN packet
         let packet = Packet {
             ptyp: PacketType::Syn,
             nseq: 0,
-            peer: *self.remote.ip(),
-            port: self.remote.port(),
+            peer: *addr.ip(),
+            port: addr.port(),
             ..Default::default()
         };
         let n = packet.write_to(&mut self.buf[..])?;
 
-        log::debug!("Initiating UDPx handshake");
         let (syn_ack, remote) = reliable_send(
             &self.buf[..n],
             &self.sock,
-            SocketAddr::V4(self.remote),
+            SocketAddr::V4(addr),
             self.timeout(),
             PacketType::Syn,
             &[PacketType::SynAck],
@@ -259,6 +260,7 @@ impl UdpxStream {
         );
 
         log::debug!("Setting socket connection to {}", remote);
+        self.remote = to_ipv4(remote)?;
         self.sock.connect(remote)?;
 
         // Send the ACK packet. We will just send this packet without waiting
@@ -349,6 +351,10 @@ pub fn reliable_send(
     recv_packet_types: &[PacketType],
     skip_address_mismatch: bool,
 ) -> io::Result<(Packet, SocketAddr)> {
+    // TODO: DEBUG
+    let timeout = Duration::from_secs(100000);
+    // TODO: DEBUG
+
     let mut recv = packet_buffer();
     let join = |packet_types: &[PacketType]| packet_types.iter().join(" or ");
     let joined = join(recv_packet_types);
