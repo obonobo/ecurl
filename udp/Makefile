@@ -8,7 +8,7 @@ default: build
 
 SHELL = bash
 buildcmd = cargo build --workspace --release
-copycmd = cp ./target/*/release/{server,client} ./
+copycmd = cp ./target/release/{server,client} ./
 
 download:
 	cargo fetch

@@ -1,6 +1,6 @@
-pub mod logging;
 pub mod packet;
-mod transport;
+pub mod transport;
+pub mod util;
 
 mod traits;
 pub use traits::*;

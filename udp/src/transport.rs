@@ -44,6 +44,7 @@ impl UdpxListener {
 
     /// Does a UDPx open connection handshake
     fn handshake(&mut self, addr: SocketAddr, packet: &Packet) -> io::Result<()> {
+        log::debug!("Server - Beginning handshake");
         if packet.ptyp != PacketType::Syn {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -76,29 +77,29 @@ impl UdpxListener {
 
         // Wait for the response - 5 tries
         let n = send.write_to(&mut self.buf[..])?;
-        let packet = reliable_send(
+        let packett = reliable_send(
             &self.buf[..n],
             &self.sock,
             addr,
             self.timeout(),
-            (PacketType::SynAck, PacketType::Syn),
+            (PacketType::SynAck, PacketType::Ack),
         )?;
 
         // This packet should be an ACK
-        if packet.ptyp != PacketType::Ack {
+        if packett.ptyp != PacketType::Ack {
             return Err(Error::new(
                 ErrorKind::Other,
                 format!(
                     "{} packet has type {} but should be ACK",
-                    "received a non-ACK in response to my SYN-ACK, ", packet.ptyp,
+                    "received a non-ACK in response to my SYN-ACK, ", packett.ptyp,
                 ),
             ));
-        } else if packet.nseq != packet.nseq + 2 {
+        } else if packett.nseq != packet.nseq + 2 {
             return Err(Error::new(
                 ErrorKind::Other,
                 format!(
                     "bad sequence number on ACK response to SYN-ACK, got {} but expected {}",
-                    packet.nseq,
+                    packett.nseq,
                     packet.nseq + 2
                 ),
             ));
@@ -159,6 +160,8 @@ impl UdpxStream {
 
     /// Performs the client side of the handshake
     fn handshake(mut self, addr: impl ToSocketAddrs) -> io::Result<Self> {
+        log::debug!("Client - Initiating UDPx handshake");
+
         self.remote = to_ipv4(addr)?;
         self.sock.connect(self.remote)?;
 
@@ -171,6 +174,8 @@ impl UdpxStream {
             ..Default::default()
         };
         let n = packet.write_to(&mut self.buf[..])?;
+
+        log::debug!("Client - Initiating UDPx handshake");
         let syn_ack = reliable_send(
             &self.buf[..n],
             &self.sock,
@@ -178,6 +183,11 @@ impl UdpxStream {
             self.timeout(),
             (PacketType::Syn, PacketType::SynAck),
         )?;
+        log::debug!(
+            "Client - Recieve SYN-ACK response from server: {:?}",
+            syn_ack
+        );
+        log::debug!("Client - Sending ACK packet to complete handshake");
 
         // Send the ACK packet. We will just send this packet without waiting
         // for a response
@@ -193,7 +203,7 @@ impl UdpxStream {
         Ok(self)
     }
 
-    pub fn write_packet(&mut self, packet: &Packet) -> io::Result<()> {
+    fn write_packet(&mut self, packet: &Packet) -> io::Result<()> {
         packet.write_to(&mut self.buf[..])?;
         self.sock.send(&self.buf)?;
         Ok(())
@@ -211,7 +221,7 @@ impl UdpxStream {
 
 impl Stream for UdpxStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
-        todo!()
+        Ok(SocketAddr::V4(self.remote))
     }
 }
 
@@ -253,7 +263,14 @@ pub fn reliable_send(
     packet_types: (PacketType, PacketType), // send/recv packet types
 ) -> io::Result<Packet> {
     let mut recv = packet_buffer();
-    for _ in 0..5 {
+    for i in 0..5 {
+        log::debug!(
+            "Try {}, sending {} packet, waiting for {} packet",
+            i,
+            packet_types.0,
+            packet_types.1
+        );
+
         sock.send_to(send, peer)?; // Resend the packet
         sock.set_read_timeout(Some(timeout))?;
         return match sock.recv_from(&mut recv) {

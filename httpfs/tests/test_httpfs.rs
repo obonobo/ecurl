@@ -151,11 +151,11 @@ fn test_multiple_clients_reading_and_writing_same_file() {
     // The task function will be different for each thread. We will alternate
     // between one thread reading, one thread writing, one reading, one writing,
     // etc.
-    let mut read = 0;
+    let mut toggle = 0;
     let mut task =
         || -> Arc<dyn Fn(&str, &str) -> Result<(u16, String), ureq::Error> + Send + Sync> {
-            read += 1;
-            Arc::new(if read % 2 == 0 {
+            toggle += 1;
+            Arc::new(if toggle % 2 == 0 {
                 |path, _| ureq_get_errors_are_ok(path)
             } else {
                 ureq_post_errors_are_ok
