@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod utils;
+mod test_utils;
 
 use core::panic;
 use std::{
@@ -8,8 +8,8 @@ use std::{
     sync::{mpsc, Arc},
     thread,
 };
+use test_utils::{better_ureq::*, *};
 use udpx::bullshit_scanner::BullshitScanner;
-use utils::{better_ureq::*, *};
 
 #[test]
 fn test_simple_get() {

@@ -13,6 +13,7 @@ use crate::{Bindable, Listener, Stream, StreamIterator};
 use std::fmt::Display;
 use std::io::{self, Error, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
+use std::thread;
 use std::time::Duration;
 
 use super::packet::PacketBuffer;
@@ -32,6 +33,9 @@ pub struct UdpxListener {
 
     /// In millis
     timeout: u64,
+
+    /// Whether the listener has been set to be nonblocking
+    nonblocking: bool,
 }
 
 impl Bindable<UdpxStream, Self> for UdpxListener {
@@ -40,6 +44,7 @@ impl Bindable<UdpxStream, Self> for UdpxListener {
             sock: UdpSocket::bind(addr)?,
             buf: packet_buffer(),
             timeout: DEFAULT_TIMEOUT,
+            nonblocking: false,
         })
     }
 }
@@ -115,6 +120,7 @@ impl UdpxListener {
             PacketType::SynAck,
             &[PacketType::Ack, PacketType::Data],
             true,
+            self.nonblocking,
         )?;
 
         // This packet should be an ACK or DATA packet
@@ -156,8 +162,8 @@ impl Listener<UdpxStream> for UdpxListener {
     // TODO: This function needs to set the underlying UDP socket of the server
     // to be nonblocking. Remember that this socket is the one accepting
     // connections.
-    fn set_nonblocking(&self, _: bool) -> io::Result<()> {
-        todo!()
+    fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
+        self.sock.set_nonblocking(nonblocking)
     }
 
     /// Returns a new UDPX stream as well as the address of the remote peer
@@ -268,6 +274,7 @@ impl UdpxStream {
             PacketType::Syn,
             &[PacketType::SynAck],
             false,
+            false,
         )?;
 
         log::debug!(
@@ -319,13 +326,15 @@ impl Stream for UdpxStream {
 
 impl Read for UdpxStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        todo!()
+        // TODO: Fill in method
+        Ok(0)
     }
 }
 
 impl Write for UdpxStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        todo!()
+        // TODO: Fill in method
+        Ok(0)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -361,6 +370,9 @@ const RELIABLE_SEND_MAX_ATTEMPTS: u8 = 5;
 
 /// Sends a packet (potentially multiple times) in a loop with a timeout and
 /// waits for the response. Used for handshakes.
+///
+/// TODO: refactor this function to reduce the number of arguments
+#[allow(clippy::too_many_arguments)]
 pub fn reliable_send(
     send: &[u8],
     sock: &UdpSocket,
@@ -369,6 +381,7 @@ pub fn reliable_send(
     send_packet_type: PacketType,
     recv_packet_types: &[PacketType],
     skip_address_mismatch: bool,
+    skip_would_block: bool,
 ) -> io::Result<(Packet, SocketAddr)> {
     // TODO: DEBUG
     let timeout = Duration::from_secs(100000);
@@ -379,11 +392,13 @@ pub fn reliable_send(
     let joined = join(recv_packet_types);
     let mut invalid_response_packets = Vec::with_capacity(5);
 
-    for i in 0..RELIABLE_SEND_MAX_ATTEMPTS {
+    let mut i = 0;
+    while i < RELIABLE_SEND_MAX_ATTEMPTS {
+        i += 1;
         log::debug!(
             "{}Sending {} packet, waiting for packets of type {}",
-            if i > 0 {
-                format!("(Attempt #{}) ", i + 1)
+            if i > 1 {
+                format!("(Attempt #{}) ", i)
             } else {
                 String::new()
             },
@@ -397,6 +412,11 @@ pub fn reliable_send(
             Ok((_, addrr)) if skip_address_mismatch && addrr != peer => continue,
             Ok((n, addrr)) => Packet::try_from(&recv[..n]).map(|p| (p, addrr)),
             Err(e) if e.kind() == ErrorKind::TimedOut => continue,
+            Err(e) if skip_would_block && e.kind() == ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(1));
+                i -= 1;
+                continue;
+            }
             Err(e) => return Err(e),
         }?;
 
