@@ -1,6 +1,4 @@
-#[cfg(test)]
-mod test_utils;
-
+mod utils;
 use core::panic;
 use std::{
     io::Write,
@@ -8,8 +6,8 @@ use std::{
     sync::{mpsc, Arc},
     thread,
 };
-use test_utils::{better_ureq::*, *};
 use udpx::bullshit_scanner::BullshitScanner;
+pub use utils::{better_ureq::*, *};
 
 #[test]
 fn test_simple_get() {
@@ -101,7 +99,6 @@ fn test_multiple_clients_get_same_file() {
     let addr = server.file_addr(&file.name);
 
     // Spawn some clients
-    // let n = 1;
     let n = 25;
     for _ in 0..n {
         let (out, addr) = (taskout.clone(), addr.clone());
@@ -146,7 +143,6 @@ fn test_multiple_clients_reading_and_writing_same_file() {
         };
 
     // Spawn the clients, some will read, some will write
-    // let n = 1;
     let n = 25;
     for i in 0..n {
         let (out, path, task) = (taskout.clone(), addr.clone(), task());

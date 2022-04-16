@@ -407,8 +407,8 @@ pub fn reliable_send(
     let joined = join(recv_packet_types);
     let mut invalid_response_packets = Vec::with_capacity(5);
 
-    let mut block_limit = 50;
     let mut i = 0;
+    let mut block_limit = 50;
     while i < RELIABLE_SEND_MAX_ATTEMPTS {
         i += 1;
         log::debug!(

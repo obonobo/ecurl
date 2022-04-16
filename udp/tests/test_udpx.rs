@@ -1,9 +1,7 @@
-#[cfg(test)]
-mod test_utils;
-
+mod utils;
 use std::{sync::mpsc, thread};
-use test_utils::*;
 use udpx::transport::UdpxStream;
+pub use utils::*;
 
 /// Tests the UDPx handshake. This test spins up a ServerDropper and attempts to
 /// start a handshake
@@ -26,7 +24,6 @@ fn test_concurrent_handshakes() {
 
     // Spawn threads
     let n = 25;
-    // let n = 1;
     for _ in 0..n {
         let (resin, addr) = (resin.clone(), addr.clone());
         thread::spawn(move || {
