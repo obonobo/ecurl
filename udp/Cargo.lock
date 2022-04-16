@@ -622,7 +622,6 @@ dependencies = [
  "clap",
  "clippy",
  "env_logger",
- "lazy_static",
  "log",
  "mime",
  "rand",
