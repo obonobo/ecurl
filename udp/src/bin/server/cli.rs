@@ -1,9 +1,8 @@
-use udpx::transport::UdpxListener;
-use udpx::util::config::err_to_exit_code;
-use udpx::util::constants::EXIT_OKAY;
-use udpx::Bindable;
-use udpx::Incoming;
-use udpx::Stream;
+use udpx::{
+    transport::UdpxListener,
+    util::{config::err_to_exit_code, constants::EXIT_OKAY},
+    Bindable, Incoming, Stream,
+};
 
 udpx::cli_binary!(ServerConfig, server_main);
 fn server_main(_: ServerConfig) -> Result<i32, i32> {

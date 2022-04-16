@@ -1,5 +1,5 @@
 #[cfg(test)]
-pub mod utils;
+mod utils;
 
 use core::panic;
 use std::{
