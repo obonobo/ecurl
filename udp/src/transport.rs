@@ -162,7 +162,8 @@ impl Listener<UdpxStream> for UdpxListener {
     // TODO: This function needs to set the underlying UDP socket of the server
     // to be nonblocking. Remember that this socket is the one accepting
     // connections.
-    fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
+    fn set_nonblocking(&mut self, nonblocking: bool) -> io::Result<()> {
+        self.nonblocking = nonblocking;
         self.sock.set_nonblocking(nonblocking)
     }
 

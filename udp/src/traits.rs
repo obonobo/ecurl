@@ -22,7 +22,7 @@ where
 
 /// Mimicks [std::net::tcp::TcpListener]
 pub trait Listener<S: Stream> {
-    fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()>;
+    fn set_nonblocking(&mut self, nonblocking: bool) -> io::Result<()>;
     fn accept(&mut self) -> io::Result<(S, SocketAddr)>;
     fn local_addr(&self) -> io::Result<SocketAddr>;
 }
@@ -88,8 +88,8 @@ mod adaptors {
         }
     }
     impl Listener<TcpStream> for TcpListener {
-        fn set_nonblocking(&self, nonblocking: bool) -> Result<()> {
-            self.set_nonblocking(nonblocking)
+        fn set_nonblocking(&mut self, nonblocking: bool) -> Result<()> {
+            TcpListener::set_nonblocking(self, nonblocking)
         }
         fn accept(&mut self) -> Result<(TcpStream, SocketAddr)> {
             TcpListener::accept(self)

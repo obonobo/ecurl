@@ -161,7 +161,7 @@ impl ServerRunner {
     {
         let addr = self.addr_str();
 
-        let listener = B::bind(addr).map_err(wrap)?;
+        let mut listener = B::bind(addr).map_err(wrap)?;
         let local_addr = listener.local_addr().map_err(wrap)?;
         log::info!("Starting server on {}", local_addr);
         listener
