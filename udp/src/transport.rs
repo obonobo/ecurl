@@ -343,6 +343,20 @@ impl Write for UdpxStream {
     }
 }
 
+impl Display for UdpxStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "UdpxStream[local_addr={}, remote_addr={}, nseq={}, {} received packets, {} packets in queue]",
+            self.remote,
+            self.sock.local_addr().unwrap_or_else(|_| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0))),
+            self.next_nseq,
+            self.packets_received.len(),
+            self.packets_sent.len()
+        )
+    }
+}
+
 /// Extracts the next ipv4 address from the given address(es). If no ipv4
 /// address exists, then an error is returned.
 pub fn to_ipv4(addr: impl ToSocketAddrs) -> io::Result<SocketAddrV4> {

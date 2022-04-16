@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     fs,
     io::{Error, Write},
     net::{IpAddr, TcpListener, TcpStream},
@@ -192,6 +193,18 @@ pub mod assertions {
                 "expected request to return an error status code and a message but got err {}",
                 err
             ),
+        }
+    }
+}
+
+/// A wrapper that let's you print [Results](Result)
+pub struct DisplayResult<T, E>(pub Result<T, E>);
+
+impl<T: Display, E: Display> Display for DisplayResult<T, E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Ok(value) => write!(f, "Ok({})", value),
+            Err(value) => write!(f, "Err({})", value),
         }
     }
 }
