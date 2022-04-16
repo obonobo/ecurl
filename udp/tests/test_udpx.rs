@@ -5,8 +5,6 @@ use std::{sync::mpsc, thread};
 use test_utils::*;
 use udpx::transport::UdpxStream;
 
-static LOGS: LoggingInitializer = LoggingInitializer::new();
-
 /// Tests the UDPx handshake. This test spins up a ServerDropper and attempts to
 /// start a handshake
 #[test]
@@ -27,8 +25,8 @@ fn test_concurrent_handshakes() {
     let (resin, resout) = mpsc::channel();
 
     // Spawn threads
-    // let n = 25;
-    let n = 1;
+    let n = 25;
+    // let n = 1;
     for _ in 0..n {
         let (resin, addr) = (resin.clone(), addr.clone());
         thread::spawn(move || {

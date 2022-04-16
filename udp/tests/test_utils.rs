@@ -211,6 +211,8 @@ impl<T: Display, E: Display> Display for DisplayResult<T, E> {
     }
 }
 
+pub static LOGS: LoggingInitializer = LoggingInitializer::new();
+
 pub struct LoggingInitializer {
     initialized: AtomicBool,
 }

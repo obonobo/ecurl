@@ -101,9 +101,9 @@ fn test_multiple_clients_get_same_file() {
     let addr = server.file_addr(&file.name);
 
     // Spawn some clients
-    let n = 1;
-    // let n = 25;
-    for i in 0..n {
+    // let n = 1;
+    let n = 25;
+    for _ in 0..n {
         let (out, addr) = (taskout.clone(), addr.clone());
         thread::spawn(move || out.send(ureq_get_errors_are_ok(&addr)).unwrap());
     }
@@ -146,8 +146,8 @@ fn test_multiple_clients_reading_and_writing_same_file() {
         };
 
     // Spawn the clients, some will read, some will write
-    let n = 1;
-    // let n = 25;
+    // let n = 1;
+    let n = 25;
     for i in 0..n {
         let (out, path, task) = (taskout.clone(), addr.clone(), task());
         let body = format!("From thread {}", i);

@@ -15,49 +15,49 @@ on:
         description: "Test scenario tags"
 
 jobs:
-  # test-httpc:
-  #   name: Run Go httpc tests
-  #   runs-on: ubuntu-latest
-  #   defaults:
-  #     run:
-  #       working-directory: httpc
-  #   strategy:
-  #     fail-fast: true
-  #     matrix:
-  #       go-version: ["1.18"]
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #     - name: Use go${{ matrix.go-version }}
-  #       uses: actions/setup-go@v2
-  #       with:
-  #         go-version: ${{ matrix.go-version }}
-  #     - run: make test
-  #     - run: make
-  #     - run: |
-  #         make static
-  #         file httpc | grep 'statically linked'
+  test-httpc:
+    name: Run Go httpc tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: httpc
+    strategy:
+      fail-fast: true
+      matrix:
+        go-version: ["1.18"]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Use go${{ matrix.go-version }}
+        uses: actions/setup-go@v2
+        with:
+          go-version: ${{ matrix.go-version }}
+      - run: make test
+      - run: make
+      - run: |
+          make static
+          file httpc | grep 'statically linked'
 
-  # test-httpfs:
-  #   name: Run Rust httpfs tests
-  #   runs-on: ubuntu-latest
-  #   defaults:
-  #     run:
-  #       working-directory: httpfs
-  #   strategy:
-  #     fail-fast: true
-  #     matrix:
-  #       rust-version: [stable]
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #     - name: Use rust ${{ matrix.rust-version }}
-  #       uses: actions-rs/toolchain@v1
-  #       with:
-  #         profile: minimal
-  #         toolchain: ${{ matrix.rust-version }}
-  #     - uses: Swatinem/rust-cache@v1
-  #     - run: make test
-  #     - run: make
-  #     - run: make static
+  test-httpfs:
+    name: Run Rust httpfs tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: httpfs
+    strategy:
+      fail-fast: true
+      matrix:
+        rust-version: [stable]
+    steps:
+      - uses: actions/checkout@v2
+      - name: Use rust ${{ matrix.rust-version }}
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust-version }}
+      - uses: Swatinem/rust-cache@v1
+      - run: make test
+      - run: make
+      - run: make static
 
   test-udp:
     name: Run Rust udp tests

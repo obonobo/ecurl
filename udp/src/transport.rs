@@ -407,6 +407,7 @@ pub fn reliable_send(
     let joined = join(recv_packet_types);
     let mut invalid_response_packets = Vec::with_capacity(5);
 
+    let mut block_limit = 50;
     let mut i = 0;
     while i < RELIABLE_SEND_MAX_ATTEMPTS {
         i += 1;
@@ -428,6 +429,11 @@ pub fn reliable_send(
             Ok((n, addrr)) => Packet::try_from(&recv[..n]).map(|p| (p, addrr)),
             Err(e) if e.kind() == ErrorKind::TimedOut => continue,
             Err(e) if skip_would_block && e.kind() == ErrorKind::WouldBlock => {
+                log::debug!("Would block ({}), block_limit = {}", e, block_limit);
+                if block_limit == 0 {
+                    return Err(e);
+                }
+                block_limit -= 1;
                 thread::sleep(Duration::from_millis(1));
                 i -= 1;
                 continue;
