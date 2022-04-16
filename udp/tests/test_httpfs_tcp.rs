@@ -97,22 +97,18 @@ fn test_multiple_clients_get_same_file() {
     let server = ServerDropper::tcpserver();
     let contents = "Hello world\n";
     let file = TempFile::new("hello.txt", contents).unwrap();
-    let n = 25;
-    let mut threads = Vec::with_capacity(n);
-    let (taskout, taskin) = mpsc::channel::<Result<(u16, String), ureq::Error>>();
+    let (taskout, taskin) = mpsc::channel();
     let addr = server.file_addr(&file.name);
 
     // Spawn some clients
-    for _ in 0..n {
+    for _ in 0..25 {
         let (out, addr) = (taskout.clone(), addr.clone());
-        threads.push(thread::spawn(move || {
-            out.send(ureq_get_errors_are_ok(&addr)).unwrap()
-        }));
+        thread::spawn(move || out.send(ureq_get_errors_are_ok(&addr)).unwrap());
     }
+    drop(taskout);
 
     // Assert client results
-    threads.into_iter().for_each(|t| t.join().unwrap());
-    for (i, res) in taskin.iter().take(n).enumerate() {
+    for (i, res) in taskin.iter().enumerate() {
         match res {
             Ok((code, body)) => {
                 assert_eq!(200, code);
@@ -129,17 +125,13 @@ fn test_multiple_clients_reading_and_writing_same_file() {
     let handle = ServerDropper::tcpserver();
     let contents = "Hello world\n";
     let file = TempFile::new("hello.txt", contents).unwrap();
-
-    let n = 25;
-    let mut threads = Vec::with_capacity(n);
-    let (taskout, taskin) = mpsc::channel::<Result<(u16, String), ureq::Error>>();
+    let (taskout, taskin) = mpsc::channel();
     let addr = handle.file_addr(&file.name);
 
     // The task function will be different for each thread. We will alternate
     // between one thread reading, one thread writing, one reading, one writing,
     // etc.
     let mut toggle = 0;
-
     #[allow(clippy::type_complexity)]
     let mut task =
         || -> Arc<dyn Fn(&str, &str) -> Result<(u16, String), ureq::Error> + Send + Sync> {
@@ -152,15 +144,15 @@ fn test_multiple_clients_reading_and_writing_same_file() {
         };
 
     // Spawn the clients, some will read, some will write
-    for i in 0..n {
+    for i in 0..25 {
         let (out, path, task) = (taskout.clone(), addr.clone(), task());
         let body = format!("From thread {}", i);
-        threads.push(thread::spawn(move || out.send(task(&path, &body)).unwrap()));
+        thread::spawn(move || out.send(task(&path, &body)).unwrap());
     }
+    drop(taskout);
 
     // Assert client results
-    threads.into_iter().for_each(|t| t.join().unwrap());
-    let results = taskin.iter().take(n).collect::<Vec<_>>(); // debug
+    let results = taskin.iter().collect::<Vec<_>>(); // debug
     for (i, res) in results.iter().enumerate() {
         match res {
             Ok((code, body)) => match code {
