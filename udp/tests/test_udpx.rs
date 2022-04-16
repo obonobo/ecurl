@@ -27,7 +27,9 @@ fn test_concurrent_handshakes() {
     let (resin, resout) = mpsc::channel();
 
     // Spawn threads
-    for _ in 0..25 {
+    // let n = 25;
+    let n = 1;
+    for _ in 0..n {
         let (resin, addr) = (resin.clone(), addr.clone());
         thread::spawn(move || {
             resin.send(UdpxStream::connect(addr)).unwrap();
