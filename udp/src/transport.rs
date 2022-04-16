@@ -170,6 +170,10 @@ impl Listener<UdpxStream> for UdpxListener {
         log::debug!("handshake completed with addr {}", addr);
         Ok((stream, addr))
     }
+
+    fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.sock.local_addr()
+    }
 }
 
 pub struct UdpxStream {

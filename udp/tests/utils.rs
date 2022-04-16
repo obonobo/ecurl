@@ -7,6 +7,7 @@ use std::{
 use udpx::{
     errors::ServerError,
     server::{Handle, Server},
+    transport::{UdpxListener, UdpxStream},
     Bindable, Listener, Stream,
 };
 
@@ -77,15 +78,16 @@ impl ServerDropper {
         L: Listener<S> + Send + Sync + 'static,
         B: Bindable<S, L>,
     {
+        let server = Server {
+            addr: cfg.0,
+            port: cfg.1,
+            dir: String::from(cfg.2),
+            n_workers: cfg.3,
+        };
+
         Ok(Self {
             cfg,
-            handle: Server {
-                addr: cfg.0,
-                port: cfg.1,
-                dir: String::from(cfg.2),
-                n_workers: cfg.3,
-            }
-            .serve::<S, L, B>()?,
+            handle: server.serve::<S, L, B>()?,
         })
     }
 
@@ -107,13 +109,36 @@ impl ServerDropper {
         todo!()
     }
 
+    /// Starts a [ServerDropper] on a random port. The port is provided by the OS.
+    pub fn server<S, L, B>() -> ServerDropper
+    where
+        S: Stream + Send + Sync + 'static,
+        L: Listener<S> + Send + Sync + 'static,
+        B: Bindable<S, L>,
+    {
+        let mut cfg = ServerDropper::DEFAULT_SERVER_CONFIG;
+        cfg.1 = 0;
+        ServerDropper::new_or_panic::<S, L, B>(cfg)
+    }
+
+    pub fn tcpserver() -> ServerDropper {
+        Self::server::<TcpStream, TcpListener, TcpListener>()
+    }
+
+    pub fn udpxserver() -> ServerDropper {
+        Self::server::<UdpxStream, UdpxListener, UdpxListener>()
+    }
+
     /// Returns a formatted string containing the address of this server
     pub fn addr(&self) -> String {
-        format!("http://{}:{}", self.cfg.0, self.cfg.1)
+        // format!("http://{}:{}", self.cfg.0, self.cfg.1)
+        format!("{}", self.handle.local_addr())
+        // todo!()
     }
 
     pub fn file_addr(&self, filename: &str) -> String {
-        format!("{}/{}", self.addr(), filename)
+        let addr = self.addr();
+        format!("http://{}/{}", addr, filename)
     }
 }
 
@@ -128,87 +153,6 @@ impl Drop for ServerDropper {
     fn drop(&mut self) {
         self.handle.shutdown();
     }
-}
-
-/// Spawns [ServerDroppers](ServerDropper) on an auto-incrementing port starting
-/// at some provided port number. Used for concurrent tests.
-///
-/// The way to use this is to make a global singleton that is reused for all
-/// your tests.
-///
-/// ### Examples
-///
-/// ```
-/// lazy_static::lazy_static! {
-///     static ref SERVERS: Mutex<AddressCountingServerFactory> = Mutex::new(
-///         AddressCountingServerFactory::default(),
-///     );
-/// }
-/// ```
-pub struct AddressCountingServerFactory {
-    next: u32,
-}
-
-impl AddressCountingServerFactory {
-    pub fn new(starting_port: u32) -> Self {
-        Self {
-            next: starting_port,
-        }
-    }
-
-    pub fn next_server<S, L, B>(&mut self) -> ServerDropper
-    where
-        S: Stream + Send + Sync + 'static,
-        L: Listener<S> + Send + Sync + 'static,
-        B: Bindable<S, L>,
-    {
-        let mut cfg = ServerDropper::DEFAULT_SERVER_CONFIG;
-        cfg.1 = self.next;
-        self.next += 1;
-        ServerDropper::new_or_panic::<S, L, B>(cfg)
-    }
-}
-
-impl Default for AddressCountingServerFactory {
-    fn default() -> Self {
-        Self {
-            next: ServerDropper::DEFAULT_SERVER_CONFIG.1,
-        }
-    }
-}
-
-/// Codegen for an AddressCountingServerFactory, also generates two factory
-/// functions: one for tcp servers, and one for udpx servers
-///
-/// ### Examples
-///
-/// This macro is meant to be used once per test file
-#[macro_export]
-macro_rules! server_factory {
-    () => {
-        lazy_static::lazy_static! {
-            static ref SERVERS: Mutex<AddressCountingServerFactory> = Mutex::new(
-                AddressCountingServerFactory::default(),
-            );
-        }
-
-        fn server<S, L, B>() -> ServerDropper
-        where
-            S: Stream + Send + Sync + 'static,
-            L: Listener<S> + Send + Sync + 'static,
-            B: Bindable<S, L>,
-        {
-            SERVERS.lock().unwrap().next_server::<S, L, B>()
-        }
-
-        fn tcpserver() -> ServerDropper {
-            server::<TcpStream, TcpListener, TcpListener>()
-        }
-
-        fn udpxserver() -> ServerDropper {
-            server::<UdpxStream, UdpxListener, UdpxListener>()
-        }
-    };
 }
 
 pub mod better_ureq {

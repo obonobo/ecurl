@@ -24,6 +24,7 @@ where
 pub trait Listener<S: Stream> {
     fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()>;
     fn accept(&mut self) -> io::Result<(S, SocketAddr)>;
+    fn local_addr(&self) -> io::Result<SocketAddr>;
 }
 
 // Blanket implementation. All Listeners implement Incoming automatically
@@ -92,6 +93,9 @@ mod adaptors {
         }
         fn accept(&mut self) -> Result<(TcpStream, SocketAddr)> {
             TcpListener::accept(self)
+        }
+        fn local_addr(&self) -> io::Result<SocketAddr> {
+            TcpListener::local_addr(self)
         }
     }
 }

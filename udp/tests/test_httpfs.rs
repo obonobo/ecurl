@@ -1,27 +1,19 @@
-#![allow(clippy::type_complexity)]
-
 #[cfg(test)]
 pub mod utils;
 
 use core::panic;
 use std::{
     io::Write,
-    net::{TcpListener, TcpStream},
-    sync::{mpsc, Arc, Mutex},
+    net::TcpStream,
+    sync::{mpsc, Arc},
     thread,
 };
-use udpx::{
-    bullshit_scanner::BullshitScanner,
-    transport::{UdpxListener, UdpxStream},
-    Bindable, Listener, Stream,
-};
+use udpx::bullshit_scanner::BullshitScanner;
 use utils::{better_ureq::*, *};
-
-server_factory!();
 
 #[test]
 fn test_simple_get() {
-    let handle = tcpserver();
+    let handle = ServerDropper::tcpserver();
     let contents = "Hello world!\n";
     let file = TempFile::new_or_panic("hello!.txt", contents);
     let got = ureq::get(&handle.file_addr(&file.name))
@@ -35,7 +27,7 @@ fn test_simple_get() {
 
 #[test]
 fn test_simple_post() {
-    let handle = tcpserver();
+    let handle = ServerDropper::tcpserver();
     let contents = "Hello world!\n";
     let file = TempFile::new_or_panic("hello.txt", "");
     let posted = ureq::post(&handle.file_addr(&file.name))
@@ -57,7 +49,7 @@ fn test_simple_post() {
 
 #[test]
 fn test_not_found() {
-    let handle = tcpserver();
+    let handle = ServerDropper::tcpserver();
     assertions::assert_request_returns_error(
         ureq::get(&handle.file_addr("hello.txt")),
         404,
@@ -71,7 +63,7 @@ fn test_forbidden() {
     // We will make this request with raw TCP because ureq does not like sending
     // invalid URLs like http://localhost:8080/../../somefile.txt
 
-    let handle = tcpserver();
+    let handle = ServerDropper::tcpserver();
     let request = "GET /../../hello.txt HTTP/1.1\r\n\r\n";
     let mut sock = TcpStream::connect(handle.addr().trim_start_matches("http://")).unwrap();
     sock.write_all(request.as_bytes()).unwrap();
@@ -102,7 +94,7 @@ fn test_forbidden() {
 /// Tests multiple clients reading the same file
 #[test]
 fn test_multiple_clients_get_same_file() {
-    let server = tcpserver();
+    let server = ServerDropper::tcpserver();
     let contents = "Hello world\n";
     let file = TempFile::new("hello.txt", contents).unwrap();
     let n = 25;
@@ -134,7 +126,7 @@ fn test_multiple_clients_get_same_file() {
 /// Tests multiple clients reading and writing the same file
 #[test]
 fn test_multiple_clients_reading_and_writing_same_file() {
-    let handle = tcpserver();
+    let handle = ServerDropper::tcpserver();
     let contents = "Hello world\n";
     let file = TempFile::new("hello.txt", contents).unwrap();
 
@@ -147,6 +139,8 @@ fn test_multiple_clients_reading_and_writing_same_file() {
     // between one thread reading, one thread writing, one reading, one writing,
     // etc.
     let mut toggle = 0;
+
+    #[allow(clippy::type_complexity)]
     let mut task =
         || -> Arc<dyn Fn(&str, &str) -> Result<(u16, String), ureq::Error> + Send + Sync> {
             toggle += 1;

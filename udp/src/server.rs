@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
     io::Read,
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -82,14 +82,16 @@ pub struct Handle {
     exit: Arc<AtomicBool>,
     done: Arc<Barrier>,
     main: Option<JoinHandle<()>>,
+    local_addr: SocketAddr,
 }
 
 impl Handle {
-    pub fn new() -> Self {
+    pub fn new(local_addr: SocketAddr) -> Self {
         Self {
             exit: Arc::new(AtomicBool::new(false)),
             done: Arc::new(Barrier::new(2)),
             main: None,
+            local_addr,
         }
     }
 
@@ -109,11 +111,18 @@ impl Handle {
     fn set_main(&mut self, handle: JoinHandle<()>) {
         self.main = Some(handle);
     }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
 }
 
 impl Default for Handle {
     fn default() -> Self {
-        Self::new()
+        Self::new(SocketAddr::V4(SocketAddrV4::new(
+            Ipv4Addr::new(127, 0, 0, 0),
+            0,
+        )))
     }
 }
 
@@ -126,7 +135,8 @@ impl Clone for Handle {
         Self {
             exit: self.exit.clone(),
             done: self.done.clone(),
-            main: None,
+            main: None, // We clone everything except the main thread JoinHandle
+            ..*self
         }
     }
 }
@@ -143,7 +153,7 @@ struct ServerRunner {
 }
 
 impl ServerRunner {
-    fn serve<S, L, B>(&self) -> Result<Handle, ServerError>
+    fn serve<S, L, B>(&mut self) -> Result<Handle, ServerError>
     where
         S: Stream + Send + 'static,
         L: Listener<S> + Send + 'static,
@@ -153,11 +163,12 @@ impl ServerRunner {
         log::info!("Starting server on {}", addr);
 
         let listener = B::bind(addr).map_err(wrap)?;
+        let local_addr = listener.local_addr().map_err(wrap)?;
         listener
             .set_nonblocking(true)
             .map_err(ServerError::wrap_err)?;
 
-        let mut handle = Handle::new();
+        let mut handle = Handle::new(local_addr);
 
         // Spin up a request handler loop in a new thread
         let (handlec, threadsc, dirc) = (handle.clone(), self.threads.clone(), self.dir.clone());
