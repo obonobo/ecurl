@@ -357,6 +357,8 @@ impl<T: Display, I: Iterator<Item = T>> JoinIter for I {
     }
 }
 
+const RELIABLE_SEND_MAX_ATTEMPTS: u8 = 5;
+
 /// Sends a packet (potentially multiple times) in a loop with a timeout and
 /// waits for the response. Used for handshakes.
 pub fn reliable_send(
@@ -377,11 +379,11 @@ pub fn reliable_send(
     let joined = join(recv_packet_types);
     let mut invalid_response_packets = Vec::with_capacity(5);
 
-    for i in 0..5 {
+    for i in 0..RELIABLE_SEND_MAX_ATTEMPTS {
         log::debug!(
             "{}Sending {} packet, waiting for packets of type {}",
             if i > 0 {
-                format!("(Attempt #{}) ", i)
+                format!("(Attempt #{}) ", i + 1)
             } else {
                 String::new()
             },

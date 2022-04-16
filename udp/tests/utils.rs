@@ -24,7 +24,7 @@ impl TempFile {
     /// Creates a temporary file with the provided contents. To avoid filename
     /// conflicts, the filename will be prefixed with a random string
     pub fn new(filename: &str, contents: &str) -> Result<Self, Error> {
-        let filename = vec![
+        let filename = [
             "TEMP_",
             thread_rng()
                 .sample_iter(&Alphanumeric)
@@ -35,9 +35,7 @@ impl TempFile {
             "_",
             filename,
         ]
-        .into_iter()
-        .collect::<String>();
-
+        .join("");
         fs::File::create(&filename)?.write_all(contents.as_bytes())?;
         Ok(Self { name: filename })
     }
@@ -66,7 +64,6 @@ impl Default for TempFile {
 /// not implemented for the general [Server] type.
 pub struct ServerDropper {
     handle: Handle,
-    cfg: ServerConfig,
 }
 
 impl ServerDropper {
@@ -86,7 +83,6 @@ impl ServerDropper {
         };
 
         Ok(Self {
-            cfg,
             handle: server.serve::<S, L, B>()?,
         })
     }
@@ -131,9 +127,7 @@ impl ServerDropper {
 
     /// Returns a formatted string containing the address of this server
     pub fn addr(&self) -> String {
-        // format!("http://{}:{}", self.cfg.0, self.cfg.1)
-        format!("{}", self.handle.local_addr())
-        // todo!()
+        self.handle.local_addr().to_string()
     }
 
     pub fn file_addr(&self, filename: &str) -> String {
