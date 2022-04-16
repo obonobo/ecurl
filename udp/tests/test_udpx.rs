@@ -2,15 +2,16 @@
 mod test_utils;
 
 use std::{sync::mpsc, thread};
-
 use test_utils::*;
-use udpx::{transport::UdpxStream, util::logging::init_logging};
+use udpx::transport::UdpxStream;
+
+static LOGS: LoggingInitializer = LoggingInitializer::new();
 
 /// Tests the UDPx handshake. This test spins up a ServerDropper and attempts to
 /// start a handshake
 #[test]
 fn test_handshake() {
-    init_logging(true); // For better debugging info
+    LOGS.initialize();
     let handle = ServerDropper::udpxserver();
     let addr = handle.addr();
     UdpxStream::connect(addr).unwrap();
@@ -20,7 +21,7 @@ fn test_handshake() {
 /// time
 #[test]
 fn test_concurrent_handshakes() {
-    init_logging(true);
+    LOGS.initialize();
     let handle = ServerDropper::udpxserver();
     let addr = handle.addr();
     let (resin, resout) = mpsc::channel();

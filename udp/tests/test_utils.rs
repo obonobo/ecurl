@@ -3,12 +3,14 @@ use std::{
     fs,
     io::{Error, Write},
     net::{IpAddr, TcpListener, TcpStream},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use udpx::{
     errors::ServerError,
     server::{Handle, Server},
     transport::{UdpxListener, UdpxStream},
+    util::logging::init_logging,
     Bindable, Listener, Stream,
 };
 
@@ -206,5 +208,30 @@ impl<T: Display, E: Display> Display for DisplayResult<T, E> {
             Ok(value) => write!(f, "Ok({})", value),
             Err(value) => write!(f, "Err({})", value),
         }
+    }
+}
+
+pub struct LoggingInitializer {
+    initialized: AtomicBool,
+}
+
+impl LoggingInitializer {
+    pub const fn new() -> Self {
+        Self {
+            initialized: AtomicBool::new(false),
+        }
+    }
+
+    pub fn initialize(&self) {
+        if !self.initialized.load(Ordering::SeqCst) {
+            self.initialized.store(true, Ordering::SeqCst);
+            init_logging(true);
+        }
+    }
+}
+
+impl Default for LoggingInitializer {
+    fn default() -> Self {
+        Self::new()
     }
 }
