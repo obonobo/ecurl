@@ -1,8 +1,8 @@
 use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
-    net::{IpAddr, Ipv4Addr, TcpListener, TcpStream},
+    io::Read,
+    net::{IpAddr, Ipv4Addr},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -46,7 +46,7 @@ impl Server {
     /// Possible values for this type are
     /// [UdpxListener](crate::transport::UdpxListener) or
     /// [std::net::tcp::TcpListener]
-    pub fn serve<'a, S, L, B>(&self) -> Result<Handle, ServerError>
+    pub fn serve<S, L, B>(&self) -> Result<Handle, ServerError>
     where
         S: Stream + Send + Sync + 'static,
         L: Listener<S> + Send + Sync + 'static,
