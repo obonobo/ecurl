@@ -19,30 +19,6 @@ use utils::{better_ureq::*, *};
 
 server_factory!();
 
-// // Global server factory for running tests in parallel
-// lazy_static::lazy_static! {
-//     static ref SERVERS: Mutex<AddressCountingServerFactory> = Mutex::new(
-//         AddressCountingServerFactory::default(),
-//     );
-// }
-
-// fn server<S, L, B>() -> ServerDropper
-// where
-//     S: Stream + Send + Sync + 'static,
-//     L: Listener<S> + Send + Sync + 'static,
-//     B: Bindable<S, L>,
-// {
-//     SERVERS.lock().unwrap().next_server::<S, L, B>()
-// }
-
-// fn tcpserver() -> ServerDropper {
-//     server::<TcpStream, TcpListener, TcpListener>()
-// }
-
-// fn udpxserver() -> ServerDropper {
-//     server::<UdpxStream, UdpxListener, UdpxListener>()
-// }
-
 #[test]
 fn test_simple_get() {
     let handle = tcpserver();

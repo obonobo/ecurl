@@ -98,6 +98,15 @@ impl ServerDropper {
         Self::new::<S, L, B>(cfg).unwrap()
     }
 
+    pub fn new_random_port<S, L, B>() -> Self
+    where
+        S: Stream + Send + Sync + 'static,
+        L: Listener<S> + Send + Sync + 'static,
+        B: Bindable<S, L>,
+    {
+        todo!()
+    }
+
     /// Returns a formatted string containing the address of this server
     pub fn addr(&self) -> String {
         format!("http://{}:{}", self.cfg.0, self.cfg.1)
@@ -170,6 +179,10 @@ impl Default for AddressCountingServerFactory {
 
 /// Codegen for an AddressCountingServerFactory, also generates two factory
 /// functions: one for tcp servers, and one for udpx servers
+///
+/// ### Examples
+///
+/// This macro is meant to be used once per test file
 #[macro_export]
 macro_rules! server_factory {
     () => {
