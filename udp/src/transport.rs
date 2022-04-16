@@ -101,7 +101,7 @@ impl UdpxListener {
 
         // We need to create a new UdpSocket for our response - let the OS
         // choose the port
-        let sock = UdpSocket::bind("localhost:0")?;
+        let sock = UdpSocket::bind("127.0.0.1:0")?;
         log::debug!(
             "Dispatching to new UDP socket for the rest of the conversation, new socket = {}",
             sock.local_addr()?
