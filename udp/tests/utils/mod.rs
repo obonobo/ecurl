@@ -245,9 +245,9 @@ pub mod simple_udpx {
 
     /// Spins up a simple UDPx server on a random address using the provided
     /// handler
-    pub fn serve<S>(handler: S) -> SocketAddr
+    pub fn serve<S, R>(handler: S) -> SocketAddr
     where
-        S: 'static + Send + Sync + FnOnce(UdpxListener) -> Result<(), std::io::Error>,
+        S: 'static + Send + FnOnce(UdpxListener) -> R,
     {
         let (addrsend, addrrecv) = mpsc::channel();
         thread::spawn(move || {
@@ -258,8 +258,7 @@ pub mod simple_udpx {
                             .and_then(|a| addrsend.send(a).map_err(util::InTwo::intwo).map(|_| l))
                     })
                     .expect("Send error: server cannot report its address"),
-            )
-            .expect("Server handler received an error")
+            );
         });
 
         addrrecv
