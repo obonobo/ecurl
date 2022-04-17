@@ -7,9 +7,10 @@
 //! needs to be easy to swap between the two transports.
 
 use crate::packet::{packet_buffer, Packet, PacketType};
-use crate::util::random_udp_socket_addr;
+use crate::util::{millis, random_udp_socket_addr};
 use crate::{Bindable, Listener, Stream, StreamIterator};
 
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{self, Error, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
@@ -183,13 +184,29 @@ impl Listener<UdpxStream> for UdpxListener {
     }
 }
 
+/// A struct for keeping track of sent/received packets
+#[derive(Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
+struct PacketTransfer {
+    acked: bool,
+    packet: Packet,
+}
+
+impl From<Packet> for PacketTransfer {
+    fn from(packet: Packet) -> Self {
+        Self {
+            packet,
+            ..Default::default()
+        }
+    }
+}
+
 pub struct UdpxStream {
     sock: UdpSocket,
     buf: PacketBuffer,
     remote: SocketAddrV4,
     timeout: u64,
-    packets_received: Vec<Packet>,
-    packets_sent: Vec<Packet>,
+    packets_received: HashMap<u32, PacketTransfer>,
+    packets_sent: HashMap<u32, PacketTransfer>,
     next_nseq: u32,
 }
 
@@ -225,14 +242,15 @@ impl UdpxStream {
             buf: packet_buffer(),
             remote,
             next_nseq: nseq,
-            packets_received: Vec::with_capacity(32),
-            packets_sent: Vec::with_capacity(32),
+            packets_received: HashMap::with_capacity(32),
+            packets_sent: HashMap::with_capacity(32),
         }
     }
 
     /// Used serverside to load initial data as received packets in some cases
     fn load_initial_data_packets(mut self, initial_data: impl IntoIterator<Item = Packet>) -> Self {
-        self.packets_received.extend(initial_data.into_iter());
+        self.packets_received
+            .extend(initial_data.into_iter().map(|p| (p.nseq, p.into())));
         self
     }
 
@@ -327,15 +345,124 @@ impl Stream for UdpxStream {
 
 impl Read for UdpxStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        // TODO: Fill in method
-        Ok(0)
+        let mut red = 0;
+        while red < buf.len() {
+            // We will only try reading for a short period of time
+            self.sock.set_read_timeout(millis(50))?;
+
+            // Grab a packet from either the received packets buffer, or a fresh
+            // packet from the socket.
+            let mut transfer = {
+                if let Some(packet) = self.packets_received.remove(&self.next_nseq) {
+                    packet
+                } else {
+                    let n = match self.sock.recv(&mut self.buf) {
+                        Ok(n) => n,
+                        Err(e) if e.kind() == ErrorKind::TimedOut => return Ok(red),
+                        Err(e) => return Err(e),
+                    };
+
+                    let transfer: PacketTransfer =
+                        Packet::try_from(&self.buf[..n]).wrap_malpac()?.into();
+
+                    // If this is not the packet we are looking for, then
+                    // buffer it and try again
+                    if transfer.packet.nseq != self.next_nseq {
+                        // Then buffer this packet, and try to read another
+                        // one
+                        self.packets_received.insert(transfer.packet.nseq, transfer);
+                        continue;
+                    }
+                    transfer
+                }
+            };
+
+            // We now have the next packet in the sequence in hand, read as much
+            // as possible into the buffer. If there is still data in the
+            // packet, return it back to the queue and don't increment
+            // next_seq
+            let n = std::cmp::min(transfer.packet.data.len(), buf.len() - red);
+            let into = &mut buf[red..n];
+            let from = &transfer.packet.data[..n];
+            into.copy_from_slice(from);
+            red += n;
+            transfer.packet.data.drain(0..n);
+
+            if transfer.packet.data.is_empty() {
+                // This packet has been fully read, we can now drop it entirely
+                self.next_nseq += 1;
+            } else {
+                // Then return this packet to the queue, we are not finished
+                // reading it
+                self.packets_received.insert(transfer.packet.nseq, transfer);
+            }
+        }
+        Ok(red)
     }
 }
 
 impl Write for UdpxStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // TODO: Fill in method
-        Ok(0)
+        // Turn the data into packets, queue them up and write them to our
+        // socket
+
+        // TODO: pass this iterator directly into packets_sent.extend(). Keeping
+        // this here for now for debugging purposes.
+        let packets = Packet::stream(buf)
+            .packet_type(PacketType::Data)
+            .remote(self.remote)
+            .seq(self.next_nseq)
+            .map(PacketTransfer::from)
+            .collect::<Vec<_>>(); // debug
+
+        self.packets_sent
+            .extend(packets.into_iter().map(|p| (p.packet.nseq, p)));
+
+        // TODO: for now we will but the ACK-loop right in here. In the future,
+        // we may move the loop somewhere else, perhaps into the `flush` method?
+        let mut n = 0;
+        while !self.packets_sent.is_empty() {
+            // Send/resend packets
+            for transfer in self.packets_sent.values() {
+                self.sock
+                    .set_write_timeout(millis(5))
+                    .expect("Set socket timeout should succeed");
+
+                transfer.packet.write_to(&mut self.buf[..]).unwrap();
+                match self.sock.send(&self.buf) {
+                    Ok(_) => {}
+                    Err(e) if e.kind() == ErrorKind::TimedOut => continue,
+                    Err(e) => return Err(e),
+                };
+            }
+
+            // Check for acked packets
+            self.sock.set_read_timeout(millis(30))?;
+            for _ in 0..self.packets_sent.len() {
+                let packet = match self.sock.recv(&mut self.buf) {
+                    Ok(n) => Packet::try_from(&self.buf[..n]).wrap_malpac()?,
+                    Err(e) if e.kind() == ErrorKind::TimedOut => break,
+                    Err(e) => return Err(e),
+                };
+
+                // Skip non-ACK packet's (add them to our received-packets
+                // buffer if they are DATA packets)
+                match packet.ptyp {
+                    PacketType::Ack => {
+                        if let Some(p) = self.packets_sent.remove(&packet.nseq) {
+                            n += p.packet.data.len();
+                        }
+                    }
+                    PacketType::Data => {
+                        self.packets_received.insert(packet.nseq, packet.into());
+                        continue;
+                    }
+                    _ => continue, // drop packet otherwise
+                }
+            }
+        }
+
+        Ok(n)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -378,6 +505,21 @@ pub trait JoinIter {
 impl<T: Display, I: Iterator<Item = T>> JoinIter for I {
     fn join(self, sep: &str) -> String {
         self.map(|e| e.to_string()).collect::<Vec<_>>().join(sep)
+    }
+}
+
+trait MalformedPacketError: Sized {
+    fn wrap_malpac(self) -> Self;
+}
+
+impl MalformedPacketError for Result<Packet, io::Error> {
+    fn wrap_malpac(self) -> Self {
+        self.map_err(|e| {
+            io::Error::new(
+                ErrorKind::Other,
+                format!("received a malformed packet: {}", e),
+            )
+        })
     }
 }
 

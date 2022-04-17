@@ -3,7 +3,7 @@
 
 use std::fmt::Display;
 use std::io::{Error, ErrorKind, Read, Write};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 
 /// The custom packet structure defined by the assignment requirements
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
@@ -222,6 +222,16 @@ impl<R: Read> PacketStream<R> {
     packet_stream_setter!(port, u16, false);
     packet_stream_setter!(peer, Ipv4Addr, false);
     packet_stream_setter!(packet_type, PacketType, false);
+
+    /// Sets both the port and the ip fields of the packets
+    pub fn remote(self, addr: SocketAddrV4) -> Self {
+        self.peer(*addr.ip()).port(addr.port())
+    }
+
+    /// Returns the current sequence number o
+    pub fn current_seq(&self) -> u32 {
+        self.seq
+    }
 }
 
 /// The type of a packet
@@ -289,7 +299,7 @@ impl Display for PacketType {
 
 impl Default for PacketType {
     fn default() -> Self {
-        Self::Ack
+        Self::Data
     }
 }
 

@@ -2,7 +2,7 @@
 
 pub use funcs::*;
 mod funcs {
-    use std::io::Read;
+    use std::{io::Read, time::Duration};
 
     use crate::{ANY_PORT, LOCALHOST};
 
@@ -16,6 +16,12 @@ mod funcs {
             .flat_map(Result::ok)
             .map(char::from)
             .collect()
+    }
+
+    /// For setting read/write timeouts (those functions take
+    /// [Optionals](Option) containing the duration)
+    pub fn millis(how_many: u64) -> Option<Duration> {
+        Some(Duration::from_millis(how_many))
     }
 }
 
