@@ -262,10 +262,6 @@ impl UdpxStream {
         )
     }
 
-    fn with_timeout(self, timeout: u64) -> Self {
-        Self { timeout, ..self }
-    }
-
     /// Performs the client side of the handshake
     fn handshake(mut self, addr: impl ToSocketAddrs) -> io::Result<Self> {
         let addr = to_ipv4(addr)?;
@@ -297,9 +293,8 @@ impl UdpxStream {
         )?;
 
         log::debug!(
-            "Received SYN-ACK response from server (remote addr = {}): {:?}",
+            "Received SYN-ACK response from server (remote addr = {})",
             remote,
-            syn_ack
         );
 
         log::debug!("Setting socket remote peer to {}", remote);
@@ -316,6 +311,7 @@ impl UdpxStream {
             port: self.remote.port(),
             ..Default::default()
         })?;
+        log::debug!("Handshake complete! Returning UdpxStream");
 
         // Handshake is done!
         Ok(self)
@@ -359,7 +355,12 @@ impl Read for UdpxStream {
                     let n = match self.sock.recv(&mut self.buf) {
                         Ok(n) => n,
                         Err(e) if e.kind() == ErrorKind::TimedOut => return Ok(red),
-                        Err(e) => return Err(e),
+                        Err(e) => {
+                            log::debug!("UdpxStream::read(): {}", e);
+                            log::debug!("self  = {}", self);
+                            log::debug!("sock = {:?}", self.sock);
+                            return Err(e);
+                        }
                     };
 
                     let transfer: PacketTransfer =
@@ -442,7 +443,12 @@ impl Write for UdpxStream {
                 let packet = match self.sock.recv(&mut self.buf) {
                     Ok(n) => Packet::try_from(&self.buf[..n]).wrap_malpac()?,
                     Err(e) if e.kind() == ErrorKind::TimedOut => break,
-                    Err(e) => return Err(e),
+                    Err(e) => {
+                        log::debug!("UdpxStream::write(): {}", e);
+                        log::debug!("self  = {}", self);
+                        log::debug!("sock = {:?}", self.sock);
+                        return Err(e);
+                    }
                 };
 
                 // Skip non-ACK packet's (add them to our received-packets
@@ -487,11 +493,13 @@ impl Display for UdpxStream {
 /// Extracts the next ipv4 address from the given address(es). If no ipv4
 /// address exists, then an error is returned.
 pub fn to_ipv4(addr: impl ToSocketAddrs) -> io::Result<SocketAddrV4> {
+    let to_v4 = |a| match a {
+        SocketAddr::V4(addr) => Some(addr),
+        _ => None,
+    };
+
     addr.to_socket_addrs()?
-        .flat_map(|a| match a {
-            SocketAddr::V4(addr) => Some(addr),
-            _ => None,
-        })
+        .flat_map(to_v4)
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "only ipv4 addresses are supported"))
 }
@@ -589,6 +597,7 @@ pub fn reliable_send(
             continue;
         }
 
+        // let remote = packet.peer_addr();
         return Ok((packet, remote));
     }
 

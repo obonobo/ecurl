@@ -1,3 +1,5 @@
+use crate::util;
+
 ///
 /// This is a port of buffered_scanner.go
 ///
@@ -57,7 +59,7 @@ impl<'a> BullshitScanner<'a> {
         if self.cannot_read_anymore() {
             return Err(self.err.clone().unwrap());
         }
-        self.load_empty();
+        self.load_empty()?;
 
         let buf = &self.buf.bites[self.buf.red..];
         match Self::scan_line(buf) {
@@ -83,7 +85,7 @@ impl<'a> BullshitScanner<'a> {
 
                 // Otherwise, we may need to load more data. Discard the read
                 // portion of the buffer and read from the socket again
-                self.load();
+                self.load()?;
 
                 // After loading, we can retry this operation. Recursion is
                 // broken by the branches at the top of this scope - this
@@ -99,7 +101,7 @@ impl<'a> BullshitScanner<'a> {
             let err = err.unwrap(); // Won't panic
             return Err(err);
         }
-        self.load_empty();
+        self.load_empty()?;
 
         if self.buf.red < self.buf.filled {
             let b = self.buf.bites[self.buf.red];
@@ -108,7 +110,7 @@ impl<'a> BullshitScanner<'a> {
         }
 
         // Otherwise, we need to load more data
-        self.load();
+        self.load()?;
         self.next_byte()
     }
 
@@ -118,7 +120,7 @@ impl<'a> BullshitScanner<'a> {
 
     /// Discards the unread portion of the buffer and loads more data from the
     /// reader
-    fn load(&mut self) {
+    fn load(&mut self) -> Result<()> {
         use std::cmp::min;
 
         let cap = self.buf.bites.len();
@@ -138,13 +140,20 @@ impl<'a> BullshitScanner<'a> {
             }
 
             // Register the error on the scanner
-            Err(e) => self.err = Some(Rc::new(BullshitError::new().wrap(Box::new(e)))),
-        }
+            Err(e) => {
+                let e = Rc::new(BullshitError::new().wrap(Box::new(e)));
+                self.err = Some(e.clone());
+                return Err(e);
+            }
+        };
+        Ok(())
     }
 
-    fn load_empty(&mut self) {
+    fn load_empty(&mut self) -> Result<()> {
         if self.buf.filled == 0 && !self.cannot_read_anymore() {
-            self.load();
+            self.load()
+        } else {
+            Ok(())
         }
     }
 
@@ -216,7 +225,7 @@ mod iterators {
 
 impl<'a> Read for BullshitScanner<'a> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.load_empty();
+        self.load_empty().map_err(util::InTwo::intwo)?;
         let mut red = 0;
 
         if self.cannot_read_anymore() {
@@ -243,7 +252,7 @@ impl<'a> Read for BullshitScanner<'a> {
             }
 
             // Otherwise, we need to load more data
-            self.load();
+            self.load().map_err(util::InTwo::intwo)?;
         }
 
         Ok(red)
@@ -252,6 +261,8 @@ impl<'a> Read for BullshitScanner<'a> {
 
 pub mod errors {
     use std::rc::Rc;
+
+    use crate::util::InTwo;
 
     pub static EOF: &str = "EOF";
 
@@ -305,6 +316,16 @@ pub mod errors {
                 ..self
             }
         }
+
+        pub fn unwrap(self) -> Option<Box<dyn std::error::Error>> {
+            self.err
+        }
+    }
+
+    impl From<BullshitError> for std::io::Error {
+        fn from(err: BullshitError) -> Self {
+            err.intwo()
+        }
     }
 
     impl Default for BullshitError {
@@ -323,8 +344,11 @@ pub mod errors {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(
                 f,
-                "{}",
-                self.msg.clone().unwrap_or_else(|| String::from(""))
+                "BullshitError: {}",
+                self.msg
+                    .clone()
+                    .or_else(|| self.err.as_ref().map(|e| e.to_string()))
+                    .unwrap_or_else(|| String::from("empty error"))
             )
         }
     }

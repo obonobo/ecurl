@@ -3,7 +3,7 @@
 
 use std::fmt::Display;
 use std::io::{Error, ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 /// The custom packet structure defined by the assignment requirements
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
@@ -102,6 +102,10 @@ impl Packet {
     /// Panics if the buffer does not contain a valid packet
     pub fn from(buf: &[u8]) -> Self {
         Self::try_from(buf).unwrap()
+    }
+
+    pub fn peer_addr(&self) -> SocketAddr {
+        SocketAddr::V4(SocketAddrV4::new(self.peer, self.port))
     }
 }
 

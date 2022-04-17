@@ -2,9 +2,19 @@
 
 pub use funcs::*;
 mod funcs {
+    use crate::{ANY_PORT, LOCALHOST};
     use std::{io::Read, time::Duration};
 
-    use crate::{ANY_PORT, LOCALHOST};
+    pub trait InTwo<T> {
+        fn intwo(self) -> T;
+    }
+
+    impl<S: ToString> InTwo<std::io::Error> for S {
+        fn intwo(self) -> std::io::Error {
+            use std::io::{Error, ErrorKind};
+            Error::new(ErrorKind::Other, self.to_string())
+        }
+    }
 
     pub fn random_udp_socket_addr() -> String {
         format!("{}:{}", LOCALHOST, ANY_PORT)

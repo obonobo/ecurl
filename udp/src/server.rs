@@ -202,8 +202,8 @@ impl ServerRunner {
                     match handle_connection(&mut stream, &dir) {
                         Ok(_) => {}
                         Err(e) => {
-                            log::info!("{}", e);
-                            write_500(&mut stream, &format!("{}", e));
+                            log::error!("Server.handle_connection(): {}", e);
+                            // write_500(&mut stream, &format!("{}", e));
                         }
                     };
                 })
