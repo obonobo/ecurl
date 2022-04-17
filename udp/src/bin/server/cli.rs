@@ -1,6 +1,6 @@
 use udpx::{
     transport::UdpxListener,
-    util::{config::err_to_exit_code, constants::EXIT_OKAY},
+    util::{config::err_to_exit_code, constants::EXIT_OKAY, read_all},
     Bindable, Incoming, Stream,
 };
 
@@ -10,7 +10,10 @@ fn server_main(_: ServerConfig) -> Result<i32, i32> {
     let listener = UdpxListener::bind("localhost:8080").map_err(err())?;
     for stream in listener.incoming() {
         let stream = stream.unwrap();
-        log::info!("Made a connection with {}", stream.peer_addr().unwrap());
+        let peer_addr = stream.peer_addr().unwrap();
+        log::info!("SERVER: Made a connection with {}", peer_addr);
+        let red = read_all(stream);
+        log::info!("SERVER: {}", red)
     }
     Ok(EXIT_OKAY)
 }

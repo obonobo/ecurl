@@ -2,10 +2,20 @@
 
 pub use funcs::*;
 mod funcs {
+    use std::io::Read;
+
     use crate::{ANY_PORT, LOCALHOST};
 
     pub fn random_udp_socket_addr() -> String {
         format!("{}:{}", LOCALHOST, ANY_PORT)
+    }
+
+    pub fn read_all(reader: impl Read) -> String {
+        reader
+            .bytes()
+            .flat_map(Result::ok)
+            .map(char::from)
+            .collect()
     }
 }
 
