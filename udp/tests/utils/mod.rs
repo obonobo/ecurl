@@ -2,7 +2,7 @@ use std::{
     fmt::Display,
     fs,
     io::{Error, Write},
-    net::{IpAddr, TcpListener, TcpStream},
+    net::{IpAddr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -235,5 +235,35 @@ impl LoggingInitializer {
 impl Default for LoggingInitializer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub mod simple_udpx {
+    use std::{net::SocketAddr, sync::mpsc, thread, time::Duration};
+
+    use udpx::{transport::UdpxListener, util, Bindable, Listener};
+
+    /// Spins up a simple UDPx server on a random address using the provided
+    /// handler
+    pub fn serve<S>(handler: S) -> SocketAddr
+    where
+        S: 'static + Send + Sync + FnOnce(UdpxListener) -> Result<(), std::io::Error>,
+    {
+        let (addrsend, addrrecv) = mpsc::channel();
+        thread::spawn(move || {
+            handler(
+                UdpxListener::bind("127.0.0.1:0")
+                    .and_then(|l| {
+                        l.local_addr()
+                            .and_then(|a| addrsend.send(a).map_err(util::InTwo::intwo).map(|_| l))
+                    })
+                    .expect("Send error: server cannot report its address"),
+            )
+            .expect("Server handler received an error")
+        });
+
+        addrrecv
+            .recv_timeout(Duration::from_millis(100))
+            .expect("Timed out while waiting for server to report its address")
     }
 }

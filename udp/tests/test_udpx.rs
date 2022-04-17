@@ -23,6 +23,7 @@ fn test_handshake() {
 fn test_handshake_raw() {
     LOGS.initialize();
 
+    // Spin up a UDPx server that does 1 handshake
     let (addrsend, addrrecv) = mpsc::channel();
     let (errsend, errecv) = mpsc::channel();
     thread::spawn(move || {
@@ -35,17 +36,19 @@ fn test_handshake_raw() {
         errsend.send(server_error).expect("Server side error");
     });
 
-    // Assert no client errors
+    // Let the server report its address
     let addr = addrrecv
         .recv_timeout(Duration::from_millis(100))
         .expect("Server failed to report its address within timeout window");
+
+    // Assert no client errors
     UdpxStream::connect(addr).expect("Client side error");
 
     // Assert no server errors
-    assert!(errecv
+    let server_error = errecv
         .recv_timeout(Duration::from_millis(100))
-        .expect("Server failed to report connection error")
-        .is_none());
+        .expect("Server failed to report connection error");
+    assert!(server_error.is_none(), "Expecting no server errors");
 }
 
 /// Tests the UPDx handshake with many clients all trying to connect at the same
