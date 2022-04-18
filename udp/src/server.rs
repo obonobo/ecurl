@@ -241,7 +241,7 @@ impl ServerRunner {
 /// Routes requests to the appropriate handler
 fn handle_connection<S: Stream>(stream: &mut S, dir: &str) -> Result<(), ServerError> {
     // let mut reader = BufReader::with_capacity(BUFSIZE, stream.as_ref());
-    let scnr = BullshitScanner::new(stream);
+    let scnr = BullshitScanner::new(stream).ignoring_eof();
     let mut req = parse_http_request(scnr)?;
     log::info!("{}", req);
 

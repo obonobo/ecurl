@@ -5,15 +5,55 @@ use crate::util;
 ///
 use self::constants::*;
 use core::slice;
-use std::{io::Read, rc::Rc};
+use std::{fmt::Display, io::Read, rc::Rc};
 
 use self::errors::{BullshitError, Result};
+pub use self::iterators::Liner;
 
 /// scanner-related constants
 pub mod constants {
     pub const MIN_BUFSIZE: usize = 1 << 6; // 64B
     pub const MAX_BUFSIZE: usize = 1 << 27; // 128MB
     pub const DEFAULT_BUFSIZE: usize = 1 << 20; // 1MB
+}
+
+pub struct BullshitScannerNoEof<'a>(BullshitScanner<'a>);
+
+impl<'a> BullshitScannerNoEof<'a> {
+    pub fn next_byte(&mut self) -> Result<u8> {
+        self.0.next_byte().or_else(Self::ignore_eof)
+    }
+
+    pub fn lines(&'a mut self) -> iterators::Lines<'a, Self> {
+        iterators::Lines { inner: self }
+    }
+
+    pub fn bites(&'a mut self) -> iterators::Bytes<&'a mut BullshitScannerNoEof> {
+        iterators::Bytes { inner: self }
+    }
+
+    /// If the error contains the text "EOF", then this function drops the error
+    /// and returns some default value. If the error is not EOF, theis function
+    /// returns the error.
+    fn ignore_eof<T: Default, E: Display>(e: E) -> core::result::Result<T, E> {
+        if e.to_string().contains(errors::EOF) {
+            Ok(Default::default())
+        } else {
+            Err(e)
+        }
+    }
+}
+
+impl<'a> iterators::Liner for BullshitScannerNoEof<'a> {
+    fn next_line(&mut self) -> Result<(String, usize)> {
+        self.0.next_line().or_else(Self::ignore_eof)
+    }
+}
+
+impl<'a> Read for BullshitScannerNoEof<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf).or_else(Self::ignore_eof)
+    }
 }
 
 pub struct Buffer {
@@ -53,6 +93,10 @@ impl<'a> BullshitScanner<'a> {
                 bites: vec![0; capacity],
             },
         }
+    }
+
+    pub fn ignoring_eof(self) -> BullshitScannerNoEof<'a> {
+        BullshitScannerNoEof(self)
     }
 
     pub fn next_line(&mut self) -> Result<(String, usize)> {
@@ -114,6 +158,23 @@ impl<'a> BullshitScanner<'a> {
         self.next_byte()
     }
 
+    /// Note that the iterator will stop once there are no more newline
+    /// delimited tokens in the string - there may still be some bytes left, the
+    /// [BullshitScanner] is meant to provide fine-grained control over reading.
+    pub fn lines(&'a mut self) -> iterators::Lines<'a, Self> {
+        iterators::Lines { inner: self }
+    }
+
+    /// Works similar to [Read::bytes] except it doesn't completely transform
+    /// the reader, it only borrows and only consumes as many bytes as you take
+    /// from the [iterator](Iterator)
+    ///
+    /// I named this function [`bites`](`BullshitScanner::bites`) just so that
+    /// it is a bit easier to call without confusing [Read::bytes]
+    pub fn bites(&'a mut self) -> iterators::Bytes<&'a mut BullshitScanner> {
+        iterators::Bytes { inner: self }
+    }
+
     fn cannot_read_anymore(&self) -> bool {
         self.err.is_some() && self.buf.red == self.buf.filled
     }
@@ -135,7 +196,7 @@ impl<'a> BullshitScanner<'a> {
             Ok(n) => {
                 self.buf.filled += n;
                 if n == 0 {
-                    self.err = Some(Rc::new(BullshitError::new().msg("EOF")));
+                    self.err = Some(Rc::new(BullshitError::new().msg(errors::EOF)));
                 }
             }
 
@@ -168,35 +229,27 @@ impl<'a> BullshitScanner<'a> {
 
         Err(BullshitError::new().msg(&format!("read {} bytes without a newline", buf.len())))
     }
-
-    /// Note that the iterator will stop once there are no more newline
-    /// delimited tokens in the string - there may still be some bytes left, the
-    /// [BullshitScanner] is meant to provide fine-grained control over reading.
-    pub fn lines(&'a mut self) -> iterators::Lines<'a> {
-        iterators::Lines { inner: self }
-    }
-
-    /// Works similar to [Read::bytes] except it doesn't completely transform
-    /// the reader, it only borrows and only consumes as many bytes as you take
-    /// from the [iterator](Iterator)
-    ///
-    /// I named this function [`bites`](`BullshitScanner::bites`) just so that
-    /// it is a bit easier to call without confusing [Read::bytes]
-    pub fn bites(&'a mut self) -> iterators::Bytes<&'a mut BullshitScanner> {
-        iterators::Bytes { inner: self }
-    }
 }
 
 mod iterators {
     use super::*;
 
-    pub struct Lines<'a> {
-        pub inner: &'a mut BullshitScanner<'a>,
+    pub trait Liner {
+        fn next_line(&mut self) -> Result<(String, usize)>;
     }
 
-    impl<'a> Iterator for Lines<'a> {
-        type Item = (String, usize);
+    impl<'a> Liner for BullshitScanner<'a> {
+        fn next_line(&mut self) -> Result<(String, usize)> {
+            BullshitScanner::next_line(self)
+        }
+    }
 
+    pub struct Lines<'a, L: Liner> {
+        pub inner: &'a mut L,
+    }
+
+    impl<'a, L: Liner> Iterator for Lines<'a, L> {
+        type Item = (String, usize);
         fn next(&mut self) -> Option<Self::Item> {
             self.inner.next_line().map(Some).ok()?
         }
@@ -208,7 +261,6 @@ mod iterators {
 
     impl<'a> Iterator for Bytes<&'a mut BullshitScanner<'a>> {
         type Item = core::result::Result<u8, std::io::Error>;
-
         fn next(&mut self) -> Option<Self::Item> {
             let mut b: u8 = 0;
             loop {
@@ -264,7 +316,7 @@ pub mod errors {
 
     use crate::util::InTwo;
 
-    pub static EOF: &str = "EOF";
+    pub const EOF: &str = "EOF";
 
     pub type Result<T> = core::result::Result<T, Rc<BullshitError>>;
     pub type WrappableError = Box<dyn std::error::Error>;
@@ -359,7 +411,7 @@ mod tests {
     use super::*;
     use std::{io::Read, str::from_utf8};
 
-    const BUFSIZES: [usize; 8] = [1, 1 << 1, 1 << 2, 1 << 4, 1 << 6, 1 << 10, 1 << 20, 1 << 27];
+    const BUFSIZES: &[usize] = &[1, 1 << 1, 1 << 2, 1 << 4, 1 << 6, 1 << 10, 1 << 20, 1 << 27];
 
     /// Test case macro for running the scanner on different inputs, with
     /// different buffer sizes

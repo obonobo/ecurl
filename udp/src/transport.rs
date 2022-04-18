@@ -10,11 +10,10 @@ use crate::packet::{packet_buffer, Packet, PacketType};
 use crate::util::{millis, random_udp_socket_addr, TruncateLeft};
 use crate::{Bindable, Connectable, Listener, Stream, StreamIterator};
 
-use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{self, Error, ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::thread;
 use std::time::Duration;
 
@@ -115,7 +114,6 @@ impl UdpxListener {
         let n = send.write_to(&mut self.buf[..])?;
         let (ack_or_data, remote) = reliable_send(
             &self.buf[..n],
-            // &self.sock, // TODO: main socket, remove this once you have the dispatch working
             &sock,
             addr,
             self.timeout(),
@@ -233,6 +231,12 @@ pub struct UdpxStream {
     next_nseq: u32,
     closed: bool,           // Whether the connection has been closed at the other end
     err: Option<io::Error>, // Socket error that has been registered during a read/write
+}
+
+impl Drop for UdpxStream {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
 }
 
 impl Connectable for UdpxStream {
@@ -432,7 +436,7 @@ impl UdpxStream {
         }
     }
 
-    /// Acknowledge that a FIN packet has been sent
+    /// Acknowledge that a FIN packet has been received
     fn fin_ack(&mut self) -> io::Result<()> {
         let fin_ack = Packet {
             ptyp: PacketType::FinAck,
@@ -440,7 +444,7 @@ impl UdpxStream {
         };
         self.sock.set_write_timeout(millis(250))?;
         let n = fin_ack.write_to(&mut self.buf[..])?;
-        self.sock.send(&self.buf[..n])?;
+        let _ = self.sock.send(&self.buf[..n]); // ignore
         Ok(())
     }
 }
@@ -762,9 +766,9 @@ pub fn reliable_send(
     skip_address_mismatch: bool,
     skip_would_block: bool,
 ) -> io::Result<(Packet, SocketAddr)> {
-    // TODO: DEBUG
-    let timeout = Duration::from_secs(100000);
-    // TODO: DEBUG
+    // // TODO: DEBUG
+    // let timeout = Duration::from_secs(100000);
+    // // TODO: DEBUG
 
     let mut recv = packet_buffer();
     let join = |packet_types: &[PacketType]| packet_types.iter().join(" or ");

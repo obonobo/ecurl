@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    bullshit_scanner::BullshitScanner,
+    bullshit_scanner::{BullshitScannerNoEof, Liner},
     errors::{MalformedRequestError, ServerError, UnsupportedMethodError, UnsupportedProtoError},
 };
 
@@ -90,8 +90,8 @@ impl<R: Read> Display for Request<R> {
 }
 
 pub fn parse_http_request(
-    mut scnr: BullshitScanner,
-) -> Result<Request<Take<BullshitScanner>>, ServerError> {
+    mut scnr: BullshitScannerNoEof,
+) -> Result<Request<Take<BullshitScannerNoEof>>, ServerError> {
     let (proto, method, file) = parse_request_line(&mut scnr)?;
     let headers = parse_headers(&mut scnr)?;
     let limit = headers
@@ -108,7 +108,7 @@ pub fn parse_http_request(
     })
 }
 
-fn parse_headers(scnr: &mut BullshitScanner) -> Result<HashMap<String, String>, ServerError> {
+fn parse_headers(scnr: &mut BullshitScannerNoEof) -> Result<HashMap<String, String>, ServerError> {
     // Headers we read line-by-line
     let mut headers = HashMap::with_capacity(64);
     loop {
@@ -133,7 +133,9 @@ fn parse_headers(scnr: &mut BullshitScanner) -> Result<HashMap<String, String>, 
     }
 }
 
-fn parse_request_line(scnr: &mut BullshitScanner) -> Result<(Proto, Method, String), ServerError> {
+fn parse_request_line(
+    scnr: &mut BullshitScannerNoEof,
+) -> Result<(Proto, Method, String), ServerError> {
     let words = scnr
         .next_line()
         .map(|l| l.0)
