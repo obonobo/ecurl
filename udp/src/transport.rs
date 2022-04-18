@@ -13,7 +13,7 @@ use crate::{Bindable, Connectable, Listener, Stream, StreamIterator};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{self, Error, ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::thread;
 use std::time::Duration;
 
@@ -231,6 +231,7 @@ pub struct UdpxStream {
     next_nseq: u32,
     closed: bool,           // Whether the connection has been closed at the other end
     err: Option<io::Error>, // Socket error that has been registered during a read/write
+    last_nseq: Option<u32>,
 }
 
 impl Drop for UdpxStream {
@@ -288,6 +289,7 @@ impl UdpxStream {
             packets_sent: HashMap::with_capacity(32),
             err: None,
             closed: false,
+            last_nseq: None,
         }
     }
 
@@ -427,13 +429,22 @@ impl UdpxStream {
 
     /// Returns the error, if any, that has been registered on the stream
     fn registered_err(&self) -> io::Result<()> {
-        if self.closed {
+        if self.is_closed() {
             Err(self.closed_err())
         } else if let Some(err) = self.copy_of_err() {
             Err(err)
         } else {
             Ok(())
         }
+    }
+
+    fn is_closed(&self) -> bool {
+        let filter = self.last_nseq.filter(|n| self.next_nseq >= *n);
+        self.closed && filter.is_some()
+    }
+
+    fn cannot_read_anymore(&self) -> bool {
+        self.err.is_some() || self.is_closed()
     }
 
     /// Acknowledge that a FIN packet has been received
@@ -458,6 +469,16 @@ impl Stream for UdpxStream {
     fn shutdown(&mut self, _: std::net::Shutdown) -> io::Result<()> {
         let fin = Packet {
             ptyp: PacketType::Fin,
+            nseq: {
+                if let Some(n) = self.last_nseq {
+                    n
+                } else {
+                    let last_nseq = self.next_nseq;
+                    self.last_nseq = Some(last_nseq);
+                    self.next_nseq += 1;
+                    last_nseq
+                }
+            },
             ..self.packet_defaults()
         };
         let mut fin_buf = packet_buffer();
@@ -470,7 +491,7 @@ impl Stream for UdpxStream {
             match self.sock.send(fin) {
                 Ok(_) => {}
                 Err(e) if e.kind() == io::ErrorKind::TimedOut => continue,
-                Err(e) => return Err(e),
+                _ => break,
             }
 
             // Await FIN-ACK
@@ -481,7 +502,6 @@ impl Stream for UdpxStream {
                     _ => continue,
                 },
                 Err(e) if e.kind() == io::ErrorKind::TimedOut => continue,
-                // Err(e) => return Err(e),
                 _ => break, // For now, let's say that recv errors mean we can close
             };
         }
@@ -490,10 +510,14 @@ impl Stream for UdpxStream {
     }
 }
 
+/// Max number of WouldBlock skips for Read/Write
+pub const MAX_SKIPPED: usize = 5;
+
 impl Read for UdpxStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let mut red = 0;
-        while red < buf.len() {
+        let mut skipped = MAX_SKIPPED;
+        while red < buf.len() && skipped > 0 {
             self.registered_err()?;
 
             // TODO: for now we will wait forever
@@ -510,7 +534,14 @@ impl Read for UdpxStream {
                     let n = match self.sock.recv(&mut self.buf) {
                         Ok(n) => n,
                         Err(e) if e.kind() == ErrorKind::TimedOut => return Ok(red),
-                        // Err(e) if e.kind() == ErrorKind::WouldBlock => return Err(e),
+                        Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                            log::error!("UdpxStream::read(): {}", e);
+                            if skipped > 1 {
+                                log::error!("Skipping this error...");
+                            }
+                            skipped -= 1;
+                            continue;
+                        }
                         Err(e) => {
                             log::error!("UdpxStream::read(): {}", e);
                             log::error!("self = {}", self);
@@ -534,10 +565,22 @@ impl Read for UdpxStream {
                     if transfer.packet.ptyp == PacketType::Fin {
                         // Then the connection was closed at the other end.
                         // Terminate this part of the connection
+                        log::debug!("UdpxStream::read(): got a FIN packet ({})", transfer.packet);
                         self.closed = true;
                         self.fin_ack()?;
-                        return Ok(red);
-                    } else if transfer.packet.nseq < self.next_nseq {
+                        let done = self.cannot_read_anymore();
+                        if done {
+                            log::debug!("UdpxStream::read(): no more data left, exiting now");
+                            return Ok(red);
+                        } else {
+                            log::debug!(
+                                "UdpxStream::read(): but there is still data to be read..."
+                            );
+                            continue;
+                        }
+                    }
+
+                    if transfer.packet.nseq < self.next_nseq {
                         // Then we have already acked this packet, this is a
                         // resent packet and our ack got dropped
                         self.acknowledge_packet(transfer)?;
@@ -587,13 +630,19 @@ impl Write for UdpxStream {
                 .remote(self.remote)
                 .seq(self.next_nseq)
                 .map(PacketTransfer::from)
-                .map(|p| (p.packet.nseq, p)),
+                .map(|p| {
+                    self.next_nseq += 1;
+                    (p.packet.nseq, p)
+                }),
         );
 
         // TODO: for now we will put the ACK-loop right in here. In the future,
         // we may move the loop somewhere else, perhaps into the `flush` method?
+        let mut skipped = MAX_SKIPPED;
         let mut n = 0;
-        while !self.packets_sent.is_empty() {
+        while !self.packets_sent.is_empty() && skipped > 0 {
+            self.registered_err()?;
+
             // Send/resend packets
             for transfer in self.packets_sent.values() {
                 log::debug!(
@@ -607,6 +656,15 @@ impl Write for UdpxStream {
                 match self.sock.send(&self.buf[..n]) {
                     Ok(_) => {}
                     Err(e) if e.kind() == ErrorKind::TimedOut => continue,
+                    Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                        log::error!("UdpxStream::write(): {}", e);
+                        if skipped > 1 {
+                            log::error!("Skipping this error...");
+                        }
+                        skipped -= 1;
+                        continue;
+                    }
                     Err(e) => return Err(self.register_err(e)),
                 };
             }
@@ -624,6 +682,17 @@ impl Write for UdpxStream {
                 let packet = match self.sock.recv(&mut self.buf) {
                     Ok(n) => Packet::try_from(&self.buf[..n]).wrap_malpac()?,
                     Err(e) if e.kind() == ErrorKind::TimedOut => break,
+                    Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                    Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                        log::error!("UdpxStream::write(): {}", e);
+                        skipped -= 1;
+                        if skipped == 0 {
+                            break;
+                        } else {
+                            log::error!("Skipping this error...");
+                        }
+                        continue;
+                    }
                     Err(e) => {
                         log::error!("UdpxStream::write(): ({:?}) {}", e.kind(), e);
                         log::error!("self = {}", self);

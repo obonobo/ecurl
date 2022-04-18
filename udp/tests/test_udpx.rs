@@ -1,6 +1,6 @@
 mod utils;
 use std::{io::Write, sync::mpsc, thread, time::Duration};
-use udpx::{transport::UdpxStream, util::read_all, Listener};
+use udpx::{server, transport::UdpxStream, util::read_all, Listener};
 pub use utils::*;
 
 /// Tests the UDPx handshake. This test spins up a ServerDropper and attempts to
@@ -66,34 +66,57 @@ fn test_concurrent_handshakes() {
     }
 }
 
-/// Tests some basic reading from a socket server side
-#[test]
-fn test_read() {
-    LOGS.initialize();
+/// Codegen for [assert_echo] tests
+///
+/// # Examples
+/// ```
+/// test_echo! { test_echo_small: "Hello world!" }
+/// ```
+macro_rules! test_echo {($($name:ident: $msg:expr,)*) => {$(
+    #[test]
+    fn $name() {
+        LOGS.initialize();
+        assert_echo(&$msg);
+    }
+)*};}
 
+test_echo! {
+    test_echo_small: "Hello world!",
+    test_echo_big: "Hello world!".repeat(1024),
+    test_echo_very_big: "Hello world!".repeat(1<<20),
+}
+
+/// A parameterized test function that does one round trip sending the provided
+/// message
+fn assert_echo(msg: &str) {
     // Start a server thread
     let (msgsend, msgrecv) = mpsc::channel();
     let addr = simple_udpx::serve(move |mut l| {
         let msg = l.accept().map(|s| s.0).map(read_all);
-        log::debug!("Message: {:?}", msg);
         msgsend.send(msg).expect("Server failed to report results");
     });
 
     // Try to write a message to the server
     let mut sock = UdpxStream::connect(addr).unwrap();
-    let msg = b"Hello world!";
-    sock.write_all(msg).unwrap();
+    let msg = msg.as_bytes();
+    msg.chunks(1 << 10).for_each(|b| sock.write_all(b).unwrap());
     sock.shutdown().unwrap();
 
     // The server should now have reported the message it read
     let server_msg = msgrecv
-        .recv_timeout(Duration::from_millis(3000))
+        .recv_timeout(Duration::from_millis(1000))
         .expect("Server did not report its received message within the timeout window")
         .expect("Server failed to properly receive the message");
 
-    assert_eq!(msg, server_msg.as_bytes());
-}
+    let msg_debug = msg.iter().map(|b| char::from(*b)).collect::<String>();
+    println!("original msg: {}", msg_debug);
+    println!("new msg: {}", server_msg);
+    println!("equal? {}", msg_debug == server_msg);
+    println!(
+        "original len = {}, new len = {}",
+        msg_debug.len(),
+        server_msg.len()
+    );
 
-/// Tests some basic writing from client side
-#[test]
-fn test_write() {}
+    assert_eq!(msg, server_msg.as_bytes(), "not equal");
+}
