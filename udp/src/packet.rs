@@ -165,6 +165,19 @@ impl Default for Packet {
     }
 }
 
+impl Display for Packet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Packet[ptyp={}, nseq={}, peer={}, data=[{}]]",
+            self.ptyp,
+            self.nseq,
+            self.peer_addr(),
+            if self.data.is_empty() { "" } else { "..." }
+        )
+    }
+}
+
 pub struct PacketStream<R: Read> {
     reader: R,
     packet_type: PacketType,

@@ -11,7 +11,6 @@ use udpx::{
     server::{Handle, Server, ThreadsafeBindable, ThreadsafeListener, ThreadsafeStream},
     transport::{UdpxListener, UdpxStream},
     util::logging::init_logging,
-    Bindable, Listener, Stream,
 };
 
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -27,18 +26,15 @@ impl TempFile {
     /// Creates a temporary file with the provided contents. To avoid filename
     /// conflicts, the filename will be prefixed with a random string
     pub fn new(filename: &str, contents: &str) -> Result<Self, Error> {
-        let filename = [
-            "TEMP_",
+        let filename = format!(
+            "TEMP_{}_{}",
             thread_rng()
                 .sample_iter(&Alphanumeric)
                 .take(16)
                 .map(char::from)
-                .collect::<String>()
-                .as_str(),
-            "_",
-            filename,
-        ]
-        .join("");
+                .collect::<String>(),
+            filename
+        );
         fs::File::create(&filename)?.write_all(contents.as_bytes())?;
         Ok(Self { name: filename })
     }

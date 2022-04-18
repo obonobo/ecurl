@@ -66,7 +66,7 @@ impl Server {
     where
         S: ThreadsafeStream,
         L: ThreadsafeListener<S>,
-        B: ThreadsafeBindable<S> ,
+        B: ThreadsafeBindable<S>,
     {
         ServerRunner {
             addr: self.addr,
@@ -173,7 +173,7 @@ impl ServerRunner {
     where
         S: ThreadsafeStream,
         L: ThreadsafeListener<S>,
-        B: ThreadsafeBindable<S> ,
+        B: ThreadsafeBindable<S>,
     {
         let addr = self.addr_str();
         log::debug!("Attempting to bind addr {}", addr);

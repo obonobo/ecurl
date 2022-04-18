@@ -145,11 +145,8 @@ impl UdpxListener {
             }
             _ => Err(Error::new(
                 ErrorKind::Other,
-                [
-                    "received a non-ACK in response to my SYN-ACK, ",
-                    &format!("packet has type {} but should be ACK", ack_or_data.ptyp),
-                ]
-                .join(""),
+                "received a non-ACK in response to my SYN-ACK, ".to_owned()
+                    + &format!("packet has type {} but should be ACK", ack_or_data.ptyp),
             )),
         }
     }
@@ -191,6 +188,23 @@ struct PacketTransfer {
     packet: Packet,
 }
 
+impl From<&PacketTransfer> for Packet {
+    fn from(transfer: &PacketTransfer) -> Self {
+        Self {
+            ..transfer.packet.to_owned()
+        }
+    }
+}
+
+impl From<&Packet> for PacketTransfer {
+    fn from(packet: &Packet) -> Self {
+        Self {
+            acked: false,
+            packet: packet.to_owned(),
+        }
+    }
+}
+
 impl From<PacketTransfer> for Packet {
     fn from(transfer: PacketTransfer) -> Self {
         transfer.packet
@@ -230,6 +244,10 @@ impl UdpxStream {
 
     pub fn connect(addr: impl ToSocketAddrs) -> io::Result<Self> {
         Connectable::connect(addr)
+    }
+
+    pub fn local_addr(&self) -> io::Result<SocketAddrV4> {
+        todo!()
     }
 
     fn new(sock: UdpSocket, nseq: u32) -> Self {
@@ -277,7 +295,7 @@ impl UdpxStream {
 
     /// Performs the client side of the handshake
     fn handshake(mut self, addr: impl ToSocketAddrs) -> io::Result<Self> {
-        let addr = to_ipv4(addr)?;
+        let addr = try_to_ipv4(addr)?;
         log::debug!(
             "Initiating UDPx handshake with {}, local_addr = {}",
             addr,
@@ -311,7 +329,7 @@ impl UdpxStream {
         );
 
         log::debug!("Setting socket remote peer to {}", remote);
-        self.remote = to_ipv4(remote)?;
+        self.remote = try_to_ipv4(remote)?;
         self.sock.connect(remote)?;
 
         // Send the ACK packet. We will just send this packet without waiting
@@ -337,7 +355,7 @@ impl UdpxStream {
     }
 
     /// Binds to a random UDP socket for the client to use
-    pub fn random_socket() -> io::Result<UdpSocket> {
+    fn random_socket() -> io::Result<UdpSocket> {
         UdpSocket::bind(random_udp_socket_addr())
     }
 
@@ -346,8 +364,22 @@ impl UdpxStream {
     }
 
     /// Sends an ACK for this packet
-    fn acknowledge_packet<P: Into<Packet>>(&self, packet: P) -> io::Result<P> {
-        todo!()
+    fn acknowledge_packet(&mut self, transfer: PacketTransfer) -> io::Result<PacketTransfer> {
+        let ack = Packet {
+            ptyp: PacketType::Ack,
+            nseq: transfer.packet.nseq,
+            peer: self.remote.ip().to_owned(),
+            port: self.remote.port(),
+            ..Default::default()
+        };
+
+        self.sock
+            .set_write_timeout(millis(30))
+            .expect("Failed to set write timeout");
+
+        ack.write_to(&mut self.buf[..])?;
+        self.sock.send(&self.buf[..])?;
+        Ok(transfer)
     }
 
     fn buffer_and_ack(&mut self, transfer: PacketTransfer) -> io::Result<()> {
@@ -383,7 +415,6 @@ impl Read for UdpxStream {
                             log::error!("UdpxStream::read(): {}", e);
                             log::error!("self = {}", self);
                             log::error!("sock = {:?}", self.sock);
-                            log::debug!("self(debug) = {:?}", self);
                             return Err(e);
                         }
                     };
@@ -393,7 +424,12 @@ impl Read for UdpxStream {
 
                     // If this is not the packet we are looking for, then
                     // buffer it and try again
-                    if transfer.packet.nseq != self.next_nseq {
+                    if transfer.packet.nseq < self.next_nseq {
+                        // Then we have already acked this packet, this is a
+                        // resent packet and our ack got dropped
+                        self.acknowledge_packet(transfer)?;
+                        continue;
+                    } else if transfer.packet.nseq != self.next_nseq {
                         // Then buffer this packet, and try to read another
                         // one
                         self.buffer_and_ack(transfer)?;
@@ -429,29 +465,30 @@ impl Read for UdpxStream {
 
 impl Write for UdpxStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // Turn the data into packets, queue them up and write them to our
-        // socket
+        // Queue up the packets to be written
+        self.packets_sent.extend(
+            Packet::stream(buf)
+                .packet_type(PacketType::Data)
+                .remote(self.remote)
+                .seq(self.next_nseq)
+                .map(PacketTransfer::from)
+                .map(|p| (p.packet.nseq, p)),
+        );
 
-        // TODO: pass this iterator directly into packets_sent.extend(). Keeping
-        // this here for now for debugging purposes.
-        let packets = Packet::stream(buf)
-            .packet_type(PacketType::Data)
-            .remote(self.remote)
-            .seq(self.next_nseq)
-            .map(PacketTransfer::from)
-            .collect::<Vec<_>>(); // debug
-
-        self.packets_sent
-            .extend(packets.into_iter().map(|p| (p.packet.nseq, p)));
-
-        // TODO: for now we will but the ACK-loop right in here. In the future,
+        // TODO: for now we will put the ACK-loop right in here. In the future,
         // we may move the loop somewhere else, perhaps into the `flush` method?
         let mut n = 0;
         while !self.packets_sent.is_empty() {
             // Send/resend packets
             for transfer in self.packets_sent.values() {
+                log::debug!(
+                    "UdpxStream::write(): Sending packet (seq={}): {}",
+                    transfer.packet.nseq,
+                    transfer.packet
+                );
+
                 self.sock
-                    .set_write_timeout(millis(5))
+                    .set_write_timeout(millis(10))
                     .expect("Set socket timeout should succeed");
 
                 transfer.packet.write_to(&mut self.buf[..]).unwrap();
@@ -510,35 +547,35 @@ impl Write for UdpxStream {
 
 impl Display for UdpxStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let packets_string = |packets: &HashMap<u32, PacketTransfer>| {
+            let joined = packets.iter().map(|p| p.0.to_string()).join(", ");
+            if !joined.is_empty() {
+                format!(" (ids are {})", joined)
+            } else {
+                joined
+            }
+        };
+
         write!(
             f,
             "{}",
-            [
-                format!(
-                    "UdpxStream[local_addr={}, ",
-                    self.sock
-                        .local_addr()
-                        .unwrap_or_else(|_| SocketAddr::V4(SocketAddrV4::new(
-                            Ipv4Addr::new(127, 0, 0, 1),
-                            0
-                        )))
-                ),
-                format!("remote_addr={}, ", self.remote),
-                format!("nseq={}, ", self.next_nseq),
-                format!(
-                    "{} queued recv packets, {} queued send packets]",
+            format!("UdpxStream[local_addr={}, ", to_ipv4(&self.sock))
+                + &format!("remote_addr={}, ", self.remote)
+                + &format!("nseq={}, ", self.next_nseq)
+                + &format!(
+                    "{} recv packets{}, {} send packets{}]",
                     self.packets_received.len(),
-                    self.packets_sent.len()
-                ),
-            ]
-            .join(""),
+                    packets_string(&self.packets_received),
+                    self.packets_sent.len(),
+                    packets_string(&self.packets_sent)
+                )
         )
     }
 }
 
 /// Extracts the next ipv4 address from the given address(es). If no ipv4
 /// address exists, then an error is returned.
-pub fn to_ipv4(addr: impl ToSocketAddrs) -> io::Result<SocketAddrV4> {
+pub fn try_to_ipv4(addr: impl ToSocketAddrs) -> io::Result<SocketAddrV4> {
     let to_v4 = |a| match a {
         SocketAddr::V4(addr) => Some(addr),
         _ => None,
@@ -548,6 +585,12 @@ pub fn to_ipv4(addr: impl ToSocketAddrs) -> io::Result<SocketAddrV4> {
         .flat_map(to_v4)
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "only ipv4 addresses are supported"))
+}
+
+pub fn to_ipv4(sock: &UdpSocket) -> SocketAddrV4 {
+    sock.local_addr()
+        .and_then(try_to_ipv4)
+        .unwrap_or_else(|_| SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0))
 }
 
 /// An extensions to [Iterator] that allows you to join anything with a
@@ -650,15 +693,13 @@ pub fn reliable_send(
     Err(if !invalid_response_packets.is_empty() {
         Error::new(
             ErrorKind::Other,
-            [
-                "invalid response packets, expected to receive a packet of one of these types:",
-                &format!(
+            "invalid response packets, ".to_owned()
+                + "expected to receive a packet of one of these types:"
+                + &format!(
                     "{}, but received only the following packets: {}",
                     joined,
                     join(&invalid_response_packets)
                 ),
-            ]
-            .join(""),
         )
     } else {
         Error::new(
