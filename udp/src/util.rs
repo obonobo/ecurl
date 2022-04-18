@@ -212,24 +212,43 @@ pub mod logging {
 #[macro_export]
 macro_rules! trait_alias {
     () => {};
-    ($(#[$($attrss:tt)*])* $visibility:vis $alias:ident = $bounds:tt $(+ $another:tt)*) => {
+
+    (
+        $(#[$($attrss:tt)*])*
+        $visibility:vis trait $alias:ident = $bounds:tt $(+ $another:tt)*
+    ) => {
         $(#[$($attrss)*])*
         $visibility trait $alias: $bounds $(+ $another)* {}
         impl<T: $bounds $(+ $another)*> $alias for T {}
     };
-    ($(#[$($attrss:tt)*])* $visibility:vis $alias:ident = $bounds:tt $(+ $another:tt)*; $($tail:tt)*) => {
+
+    (
+        $(#[$($attrss:tt)*])*
+        $visibility:vis trait $alias:ident = $bounds:tt $(+ $another:tt)*;
+        $($tail:tt)*
+    ) => {
         $(#[$($attrss)*])*
         $visibility trait $alias: $bounds $(+ $another)* {}
         impl<T: $bounds $(+ $another)*> $alias for T {}
         trait_alias! { $($tail)* }
     };
-    ($(#[$($attrss:tt)*])* $visibility:vis $alias:ident = $bounds:tt<$generic_params:tt>; $($tail:tt)*) => {
+
+    (
+        $(#[$($attrss:tt)*])*
+        $visibility:vis trait $alias:ident = $bounds:tt<$generic_params:tt>;
+        $($tail:tt)*
+    ) => {
         $(#[$($attrss)*])*
         $visibility trait $alias<B: $generic_params>: $bounds<B> {}
         impl<B: $generic_params, T: $bounds<B>> $alias<B> for T {}
         trait_alias! { $($tail)* }
     };
-    ($(#[$($attrss:tt)*])* $visibility:vis $alias:ident = $bounds:tt<$generic_params:tt> $(+ $another:tt)*; $($tail:tt)* ) => {
+
+    (
+        $(#[$($attrss:tt)*])*
+        $visibility:vis trait $alias:ident = $bounds:tt<$generic_params:tt> $(+ $another:tt)*;
+        $($tail:tt)*
+    ) => {
         $(#[$($attrss)*])*
         $visibility trait $alias<B: $generic_params>: $bounds<B> $(+ $another)* {}
         impl<B: $generic_params, T: $bounds<B> $(+ $another)*> $alias<B> for T {}

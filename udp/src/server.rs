@@ -24,18 +24,18 @@ use crate::{
 
 trait_alias! {
     /// A combination of [Send] with a `'static` lifetime
-    pub Threadsafe = Send + 'static;
+    pub trait Threadsafe = Send + 'static;
 
     /// A [Stream] that can be passed between threads
-    pub ThreadsafeStream = Stream + Threadsafe;
+    pub trait ThreadsafeStream = Stream + Threadsafe;
 
     /// A [Listener] that emits [ThreadsafeStreams](ThreadsafeStream) and is
     /// itself threadsafe
-    pub ThreadsafeListener = Listener<ThreadsafeStream> + Threadsafe;
+    pub trait ThreadsafeListener = Listener<ThreadsafeStream> + Threadsafe;
 
     /// A [Bindable] that emits [ThreadsafeListeners](ThreadsafeListener) and is
     /// itself threadsafe
-    pub ThreadsafeBindable = Bindable<ThreadsafeStream> + Threadsafe;
+    pub trait ThreadsafeBindable = Bindable<ThreadsafeStream> + Threadsafe;
 }
 
 /// 1MB
