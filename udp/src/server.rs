@@ -41,6 +41,7 @@ trait_alias! {
 /// 1MB
 pub const BUFSIZE: usize = 1 << 20;
 
+/// A config for running the file server.
 pub struct Server {
     pub addr: IpAddr,
     pub port: u32,

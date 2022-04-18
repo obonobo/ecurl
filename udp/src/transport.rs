@@ -10,6 +10,7 @@ use crate::packet::{packet_buffer, Packet, PacketType};
 use crate::util::{millis, random_udp_socket_addr, TruncateLeft};
 use crate::{Bindable, Connectable, Listener, Stream, StreamIterator};
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{self, Error, ErrorKind, Read, Write};
@@ -230,6 +231,7 @@ pub struct UdpxStream {
     packets_received: HashMap<u32, PacketTransfer>,
     packets_sent: HashMap<u32, PacketTransfer>,
     next_nseq: u32,
+    err: Option<io::Error>, // Socket error that has been registered during a read/write
 }
 
 impl Connectable for UdpxStream {
@@ -246,8 +248,8 @@ impl UdpxStream {
         Connectable::connect(addr)
     }
 
-    pub fn local_addr(&self) -> io::Result<SocketAddrV4> {
-        todo!()
+    pub fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.sock.local_addr()
     }
 
     fn new(sock: UdpSocket, nseq: u32) -> Self {
@@ -275,6 +277,7 @@ impl UdpxStream {
             next_nseq: nseq,
             packets_received: HashMap::with_capacity(32),
             packets_sent: HashMap::with_capacity(32),
+            err: None,
         }
     }
 
@@ -387,6 +390,18 @@ impl UdpxStream {
             self.packets_received.insert(t.packet.nseq, t);
         })
     }
+
+    /// "Clones" the error registered on this stream
+    fn copy_of_err(&self) -> Option<io::Error> {
+        self.err
+            .as_ref()
+            .map(|e| io::Error::new(e.kind(), e.to_string()))
+    }
+
+    fn register_err(&mut self, err: io::Error) -> io::Error {
+        self.err = Some(err);
+        self.copy_of_err().unwrap()
+    }
 }
 
 impl Stream for UdpxStream {
@@ -397,10 +412,16 @@ impl Stream for UdpxStream {
 
 impl Read for UdpxStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(err) = self.copy_of_err() {
+            return Err(err);
+        }
+
         let mut red = 0;
         while red < buf.len() {
+            // TODO: for now we will wait forever
             // We will only try reading for a short period of time
-            self.sock.set_read_timeout(millis(50))?;
+            // self.sock.set_read_timeout(millis(50))?;
+            self.sock.set_read_timeout(None).unwrap();
 
             // Grab a packet from either the received packets buffer, or a fresh
             // packet from the socket.
@@ -411,11 +432,21 @@ impl Read for UdpxStream {
                     let n = match self.sock.recv(&mut self.buf) {
                         Ok(n) => n,
                         Err(e) if e.kind() == ErrorKind::TimedOut => return Ok(red),
+                        // Err(e) if e.kind() == ErrorKind::WouldBlock => return Err(e),
                         Err(e) => {
                             log::error!("UdpxStream::read(): {}", e);
                             log::error!("self = {}", self);
                             log::error!("sock = {:?}", self.sock);
-                            return Err(e);
+
+                            // The behaviour we want here is that if the
+                            // connection gets closed or something, then that is
+                            // treated as EOF. In Rust, EOF is simply when you
+                            // return Ok(0) from a read operation. We will
+                            // register the error and return amount read. Next
+                            // time this function is called, return the
+                            // registered error.
+                            self.register_err(e);
+                            return Ok(red);
                         }
                     };
 
@@ -465,6 +496,10 @@ impl Read for UdpxStream {
 
 impl Write for UdpxStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if let Some(err) = self.copy_of_err() {
+            return Err(err);
+        }
+
         // Queue up the packets to be written
         self.packets_sent.extend(
             Packet::stream(buf)
@@ -487,17 +522,15 @@ impl Write for UdpxStream {
                     transfer.packet
                 );
 
-                self.sock
-                    .set_write_timeout(millis(10))
-                    .expect("Set socket timeout should succeed");
-
+                self.sock.set_write_timeout(millis(30)).unwrap();
                 transfer.packet.write_to(&mut self.buf[..]).unwrap();
                 match self.sock.send(&self.buf) {
                     Ok(_) => {}
                     Err(e) if e.kind() == ErrorKind::TimedOut => continue,
-                    Err(e) => return Err(e),
+                    Err(e) => return Err(self.register_err(e)),
                 };
             }
+            self.sock.set_write_timeout(None).unwrap();
 
             // Check for acked packets
             log::debug!(
@@ -515,7 +548,7 @@ impl Write for UdpxStream {
                         log::error!("UdpxStream::write(): {}", e);
                         log::error!("self = {}", self);
                         log::error!("sock = {:?}", self.sock);
-                        return Err(e);
+                        return Err(self.register_err(e));
                     }
                 };
 
@@ -525,18 +558,34 @@ impl Write for UdpxStream {
                     PacketType::Ack => {
                         log::debug!("Got an ACK for seq {}", packet.nseq);
                         if let Some(p) = self.packets_sent.remove(&packet.nseq) {
+                            log::debug!(
+                                "Marking packet {} as ACKed, will not resend, removing from queue",
+                                packet.nseq
+                            );
+                            log::debug!(
+                                "{} remaining packets: [{}]",
+                                self.packets_sent.len(),
+                                self.packets_sent.iter().map(|p| p.0.to_string()).join(", ")
+                            );
                             n += p.packet.data.len();
                         }
                     }
                     PacketType::Data => {
+                        log::debug!(
+                            "{}",
+                            "Got a DATA packet in UdpxStream::write(), ".to_owned()
+                                + "placing it in read-packets queue"
+                        );
                         self.packets_received.insert(packet.nseq, packet.into());
                         continue;
                     }
-                    _ => continue, // drop packet otherwise
+
+                    // Drop packet otherwise; at this point in the conversation
+                    // we should only be dealing with ACK or DATA packets
+                    _ => continue,
                 }
             }
         }
-
         Ok(n)
     }
 

@@ -75,6 +75,7 @@ fn test_read() {
     let (msgsend, msgrecv) = mpsc::channel();
     let addr = simple_udpx::serve(move |mut l| {
         let msg = l.accept().map(|s| s.0).map(read_all);
+        log::debug!("Message: {:?}", msg);
         msgsend.send(msg).expect("Server failed to report results");
     });
 
@@ -85,7 +86,7 @@ fn test_read() {
 
     // The server should now have reported the message it read
     let server_msg = msgrecv
-        .recv_timeout(Duration::from_millis(100))
+        .recv_timeout(Duration::from_millis(3000))
         .expect("Server did not report its received message within the timeout window")
         .expect("Server failed to properly receive the message");
 
