@@ -2,13 +2,13 @@ use std::{
     fmt::Display,
     fs,
     io::{Error, Write},
-    net::{IpAddr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
+    net::{IpAddr, TcpListener, TcpStream},
     sync::atomic::{AtomicBool, Ordering},
 };
 
 use udpx::{
     errors::ServerError,
-    server::{Handle, Server},
+    server::{Handle, Server, ThreadsafeBindable, ThreadsafeListener, ThreadsafeStream},
     transport::{UdpxListener, UdpxStream},
     util::logging::init_logging,
     Bindable, Listener, Stream,
@@ -74,9 +74,9 @@ impl ServerDropper {
 
     pub fn new<S, L, B>(cfg: ServerConfig) -> Result<Self, ServerError>
     where
-        S: Stream + Send + Sync + 'static,
-        L: Listener<S> + Send + Sync + 'static,
-        B: Bindable<S, L>,
+        S: ThreadsafeStream,
+        L: ThreadsafeListener<S>,
+        B: ThreadsafeBindable<S>,
     {
         let server = Server {
             addr: cfg.0,
@@ -92,18 +92,18 @@ impl ServerDropper {
 
     pub fn new_or_panic<S, L, B>(cfg: ServerConfig) -> Self
     where
-        S: Stream + Send + Sync + 'static,
-        L: Listener<S> + Send + Sync + 'static,
-        B: Bindable<S, L>,
+        S: ThreadsafeStream,
+        L: ThreadsafeListener<S>,
+        B: ThreadsafeBindable<S>,
     {
         Self::new::<S, L, B>(cfg).unwrap()
     }
 
     pub fn new_random_port<S, L, B>() -> Self
     where
-        S: Stream + Send + Sync + 'static,
-        L: Listener<S> + Send + Sync + 'static,
-        B: Bindable<S, L>,
+        S: ThreadsafeStream,
+        L: ThreadsafeListener<S>,
+        B: ThreadsafeBindable<S>,
     {
         todo!()
     }
@@ -111,9 +111,9 @@ impl ServerDropper {
     /// Starts a [ServerDropper] on a random port. The port is provided by the OS.
     pub fn server<S, L, B>() -> ServerDropper
     where
-        S: Stream + Send + Sync + 'static,
-        L: Listener<S> + Send + Sync + 'static,
-        B: Bindable<S, L>,
+        S: ThreadsafeStream,
+        L: ThreadsafeListener<S>,
+        B: ThreadsafeBindable<S>,
     {
         let mut cfg = ServerDropper::DEFAULT_SERVER_CONFIG;
         cfg.1 = 0;

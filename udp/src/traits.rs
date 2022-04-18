@@ -5,10 +5,15 @@ use std::io::{self, Read, Write};
 use std::marker::PhantomData;
 use std::net::{SocketAddr, ToSocketAddrs};
 
+/// A factory method for creating [Streams][Stream]
+pub trait Connectable: Stream + Sized {
+    fn connect(addr: impl ToSocketAddrs) -> io::Result<Self>;
+}
+
 /// A factory method for creating [Listeners](Listener)
-pub trait Bindable<S: Stream, L: Listener<S>> {
+pub trait Bindable<S: Stream>: Listener<S> + Sized {
     /// Binds to the specified address and listens for incoming connections
-    fn bind(addr: impl ToSocketAddrs) -> io::Result<L>;
+    fn bind(addr: impl ToSocketAddrs) -> io::Result<Self>;
 }
 
 /// Mimicks [std::net::tcp::Incoming]
@@ -48,7 +53,7 @@ pub trait Stream: Read + Write {
 /// [Listeners](Listener)
 pub struct StreamIterator<S: Stream, L: Listener<S>> {
     listener: L,
-    _s: PhantomData<S>, // This is ridiculous
+    _s: PhantomData<S>, // This is ridiculous smh
 }
 
 impl<S: Stream, L: Listener<S>> StreamIterator<S, L> {
@@ -72,12 +77,19 @@ impl<S: Stream, L: Listener<S>> Iterator for StreamIterator<S, L> {
 /// Adaptors for [std::net::tcp], contains implementations of our traits for the
 /// stdlib TCP package.
 mod adaptors {
+    use crate::Connectable;
+
     use super::{Bindable, Listener, Stream};
     use std::io::{self, Result};
     use std::net::{SocketAddr, TcpListener, TcpStream};
 
     // Delegates
-    impl Bindable<TcpStream, Self> for TcpListener {
+    impl Connectable for TcpStream {
+        fn connect(addr: impl std::net::ToSocketAddrs) -> io::Result<Self> {
+            TcpStream::connect(addr)
+        }
+    }
+    impl Bindable<TcpStream> for TcpListener {
         fn bind(addr: impl std::net::ToSocketAddrs) -> io::Result<Self> {
             TcpListener::bind(addr)
         }

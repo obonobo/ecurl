@@ -19,8 +19,24 @@ use crate::{
     errors::ServerError,
     html::template,
     parse::{parse_http_request, Method, Request},
-    Bindable, Incoming, Listener, Stream,
+    trait_alias, Bindable, Incoming, Listener, Stream,
 };
+
+trait_alias! {
+    /// A combination of [Send] with a `'static` lifetime
+    pub Threadsafe = Send + 'static;
+
+    /// A [Stream] that can be passed between threads
+    pub ThreadsafeStream = Stream + Threadsafe;
+
+    /// A [Listener] that emits [ThreadsafeStreams](ThreadsafeStream) and is
+    /// itself threadsafe
+    pub ThreadsafeListener = Listener<ThreadsafeStream> + Threadsafe;
+
+    /// A [Bindable] that emits [ThreadsafeListeners](ThreadsafeListener) and is
+    /// itself threadsafe
+    pub ThreadsafeBindable = Bindable<ThreadsafeStream> + Threadsafe;
+}
 
 /// 1MB
 pub const BUFSIZE: usize = 1 << 20;
@@ -48,9 +64,9 @@ impl Server {
     /// [std::net::tcp::TcpListener]
     pub fn serve<S, L, B>(&self) -> Result<Handle, ServerError>
     where
-        S: Stream + Send + Sync + 'static,
-        L: Listener<S> + Send + Sync + 'static,
-        B: Bindable<S, L>,
+        S: ThreadsafeStream,
+        L: ThreadsafeListener<S>,
+        B: ThreadsafeBindable<S> ,
     {
         ServerRunner {
             addr: self.addr,
@@ -155,9 +171,9 @@ struct ServerRunner {
 impl ServerRunner {
     fn serve<S, L, B>(&mut self) -> Result<Handle, ServerError>
     where
-        S: Stream + Send + 'static,
-        L: Listener<S> + Send + 'static,
-        B: Bindable<S, L>,
+        S: ThreadsafeStream,
+        L: ThreadsafeListener<S>,
+        B: ThreadsafeBindable<S> ,
     {
         let addr = self.addr_str();
         log::debug!("Attempting to bind addr {}", addr);

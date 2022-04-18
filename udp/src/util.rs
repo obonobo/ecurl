@@ -3,16 +3,34 @@
 pub use funcs::*;
 mod funcs {
     use crate::{ANY_PORT, LOCALHOST};
-    use std::{io::Read, time::Duration};
+    use std::{fmt::Display, io::Read, time::Duration};
 
+    /// A clone of [Into]. I made this clone so that I could implement `into`
+    /// for types outside this crate. For example, the blanket implementation
+    /// below that let's you convert any [Display] object into a
+    /// [std::io::Error] by wrapping it in a [std::io::ErrorKind::Other] error.
     pub trait InTwo<T> {
+        /// Let's change the name slightly so this method is a bit easier to
+        /// find...
         fn intwo(self) -> T;
     }
 
-    impl<S: ToString> InTwo<std::io::Error> for S {
+    impl<S: Display> InTwo<std::io::Error> for S {
         fn intwo(self) -> std::io::Error {
             use std::io::{Error, ErrorKind};
             Error::new(ErrorKind::Other, self.to_string())
+        }
+    }
+
+    /// A trait for truncating a collection from the left side
+    pub trait TruncateLeft {
+        /// Cut elements from the left side of a collection
+        fn truncate_left(&mut self, n: usize);
+    }
+
+    impl<T> TruncateLeft for Vec<T> {
+        fn truncate_left(&mut self, n: usize) {
+            self.drain(0..n);
         }
     }
 
@@ -174,4 +192,47 @@ pub mod logging {
             env_logger::Env::default().filter_or(LOGGING_ENV_VARIABLE, level),
         );
     }
+}
+
+/// A macro that creates a trait alias
+///
+/// # Examples
+///
+/// ```
+/// trait_alias! { pub Threadable = Send + Sync + 'static; }
+///
+/// // Creates the following code:
+/// pub trait Threadable: Send + Sync + 'static {}
+/// impl<T: Send + Sync + 'static> Threadable for T {}
+///
+/// // Can be used like so:
+/// fn do_something<T: Threadable>(param: T) {}
+/// do_something("Must implement Send + Sync + 'static!!!")
+/// ```
+#[macro_export]
+macro_rules! trait_alias {
+    () => {};
+    ($(#[$($attrss:tt)*])* $visibility:vis $alias:ident = $bounds:tt $(+ $another:tt)*) => {
+        $(#[$($attrss)*])*
+        $visibility trait $alias: $bounds $(+ $another)* {}
+        impl<T: $bounds $(+ $another)*> $alias for T {}
+    };
+    ($(#[$($attrss:tt)*])* $visibility:vis $alias:ident = $bounds:tt $(+ $another:tt)*; $($tail:tt)*) => {
+        $(#[$($attrss)*])*
+        $visibility trait $alias: $bounds $(+ $another)* {}
+        impl<T: $bounds $(+ $another)*> $alias for T {}
+        trait_alias! { $($tail)* }
+    };
+    ($(#[$($attrss:tt)*])* $visibility:vis $alias:ident = $bounds:tt<$generic_params:tt>; $($tail:tt)*) => {
+        $(#[$($attrss)*])*
+        $visibility trait $alias<B: $generic_params>: $bounds<B> {}
+        impl<B: $generic_params, T: $bounds<B>> $alias<B> for T {}
+        trait_alias! { $($tail)* }
+    };
+    ($(#[$($attrss:tt)*])* $visibility:vis $alias:ident = $bounds:tt<$generic_params:tt> $(+ $another:tt)*; $($tail:tt)* ) => {
+        $(#[$($attrss)*])*
+        $visibility trait $alias<B: $generic_params>: $bounds<B> $(+ $another)* {}
+        impl<B: $generic_params, T: $bounds<B> $(+ $another)*> $alias<B> for T {}
+        trait_alias! { $($tail)* }
+    };
 }

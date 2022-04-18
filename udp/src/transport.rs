@@ -7,8 +7,8 @@
 //! needs to be easy to swap between the two transports.
 
 use crate::packet::{packet_buffer, Packet, PacketType};
-use crate::util::{millis, random_udp_socket_addr};
-use crate::{Bindable, Listener, Stream, StreamIterator};
+use crate::util::{millis, random_udp_socket_addr, TruncateLeft};
+use crate::{Bindable, Connectable, Listener, Stream, StreamIterator};
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -39,7 +39,7 @@ pub struct UdpxListener {
     nonblocking: bool,
 }
 
-impl Bindable<UdpxStream, Self> for UdpxListener {
+impl Bindable<UdpxStream> for UdpxListener {
     fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
         Ok(Self {
             sock: UdpSocket::bind(addr)?,
@@ -191,6 +191,12 @@ struct PacketTransfer {
     packet: Packet,
 }
 
+impl From<PacketTransfer> for Packet {
+    fn from(transfer: PacketTransfer) -> Self {
+        transfer.packet
+    }
+}
+
 impl From<Packet> for PacketTransfer {
     fn from(packet: Packet) -> Self {
         Self {
@@ -200,6 +206,8 @@ impl From<Packet> for PacketTransfer {
     }
 }
 
+/// Represents one side of a UDPx connection.
+#[derive(Debug)]
 pub struct UdpxStream {
     sock: UdpSocket,
     buf: PacketBuffer,
@@ -210,13 +218,18 @@ pub struct UdpxStream {
     next_nseq: u32,
 }
 
+impl Connectable for UdpxStream {
+    fn connect(addr: impl ToSocketAddrs) -> io::Result<Self> {
+        Self::new(Self::random_socket()?, Self::FIRST_NSEQ).handshake(addr)
+    }
+}
+
 impl UdpxStream {
     /// The sequence number of the first DATA packet sent in a conversation
-    pub const FIRST_NSEQ: u32 = 4;
+    pub const FIRST_NSEQ: u32 = 3;
 
-    /// Returns an error if the ip is not ipv4
-    pub fn connect(addr: impl ToSocketAddrs) -> io::Result<UdpxStream> {
-        Self::new(Self::random_socket()?, Self::FIRST_NSEQ).handshake(addr)
+    pub fn connect(addr: impl ToSocketAddrs) -> io::Result<Self> {
+        Connectable::connect(addr)
     }
 
     fn new(sock: UdpSocket, nseq: u32) -> Self {
@@ -331,6 +344,17 @@ impl UdpxStream {
     fn timeout(&self) -> Duration {
         Duration::from_millis(self.timeout)
     }
+
+    /// Sends an ACK for this packet
+    fn acknowledge_packet<P: Into<Packet>>(&self, packet: P) -> io::Result<P> {
+        todo!()
+    }
+
+    fn buffer_and_ack(&mut self, transfer: PacketTransfer) -> io::Result<()> {
+        self.acknowledge_packet(transfer).map(|t| {
+            self.packets_received.insert(t.packet.nseq, t);
+        })
+    }
 }
 
 impl Stream for UdpxStream {
@@ -356,9 +380,10 @@ impl Read for UdpxStream {
                         Ok(n) => n,
                         Err(e) if e.kind() == ErrorKind::TimedOut => return Ok(red),
                         Err(e) => {
-                            log::debug!("UdpxStream::read(): {}", e);
-                            log::debug!("self  = {}", self);
-                            log::debug!("sock = {:?}", self.sock);
+                            log::error!("UdpxStream::read(): {}", e);
+                            log::error!("self = {}", self);
+                            log::error!("sock = {:?}", self.sock);
+                            log::debug!("self(debug) = {:?}", self);
                             return Err(e);
                         }
                     };
@@ -371,10 +396,10 @@ impl Read for UdpxStream {
                     if transfer.packet.nseq != self.next_nseq {
                         // Then buffer this packet, and try to read another
                         // one
-                        self.packets_received.insert(transfer.packet.nseq, transfer);
+                        self.buffer_and_ack(transfer)?;
                         continue;
                     }
-                    transfer
+                    self.acknowledge_packet(transfer)?
                 }
             };
 
@@ -387,7 +412,7 @@ impl Read for UdpxStream {
             let from = &transfer.packet.data[..n];
             into.copy_from_slice(from);
             red += n;
-            transfer.packet.data.drain(0..n);
+            transfer.packet.data.truncate_left(n);
 
             if transfer.packet.data.is_empty() {
                 // This packet has been fully read, we can now drop it entirely
@@ -438,15 +463,21 @@ impl Write for UdpxStream {
             }
 
             // Check for acked packets
+            log::debug!(
+                "Beginning wait for ACKs, unacked packets are [{}]",
+                self.packets_sent.keys().join(", ")
+            );
+
             self.sock.set_read_timeout(millis(30))?;
-            for _ in 0..self.packets_sent.len() {
+            for i in 0..self.packets_sent.len() {
+                log::debug!("Waiting for ACK - {}", i);
                 let packet = match self.sock.recv(&mut self.buf) {
                     Ok(n) => Packet::try_from(&self.buf[..n]).wrap_malpac()?,
                     Err(e) if e.kind() == ErrorKind::TimedOut => break,
                     Err(e) => {
-                        log::debug!("UdpxStream::write(): {}", e);
-                        log::debug!("self  = {}", self);
-                        log::debug!("sock = {:?}", self.sock);
+                        log::error!("UdpxStream::write(): {}", e);
+                        log::error!("self = {}", self);
+                        log::error!("sock = {:?}", self.sock);
                         return Err(e);
                     }
                 };
@@ -455,6 +486,7 @@ impl Write for UdpxStream {
                 // buffer if they are DATA packets)
                 match packet.ptyp {
                     PacketType::Ack => {
+                        log::debug!("Got an ACK for seq {}", packet.nseq);
                         if let Some(p) = self.packets_sent.remove(&packet.nseq) {
                             n += p.packet.data.len();
                         }
@@ -480,12 +512,26 @@ impl Display for UdpxStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "UdpxStream[local_addr={}, remote_addr={}, nseq={}, {} received packets, {} packets in queue]",
-            self.remote,
-            self.sock.local_addr().unwrap_or_else(|_| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0))),
-            self.next_nseq,
-            self.packets_received.len(),
-            self.packets_sent.len()
+            "{}",
+            [
+                format!(
+                    "UdpxStream[local_addr={}, ",
+                    self.sock
+                        .local_addr()
+                        .unwrap_or_else(|_| SocketAddr::V4(SocketAddrV4::new(
+                            Ipv4Addr::new(127, 0, 0, 1),
+                            0
+                        )))
+                ),
+                format!("remote_addr={}, ", self.remote),
+                format!("nseq={}, ", self.next_nseq),
+                format!(
+                    "{} queued recv packets, {} queued send packets]",
+                    self.packets_received.len(),
+                    self.packets_sent.len()
+                ),
+            ]
+            .join(""),
         )
     }
 }
