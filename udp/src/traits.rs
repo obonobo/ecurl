@@ -3,7 +3,7 @@
 
 use std::io::{self, Read, Write};
 use std::marker::PhantomData;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{Shutdown, SocketAddr, ToSocketAddrs};
 
 /// A factory method for creating [Streams][Stream]
 pub trait Connectable: Stream + Sized {
@@ -47,6 +47,7 @@ where
 /// [Readers](Read) as well as [Writers](Write).
 pub trait Stream: Read + Write {
     fn peer_addr(&self) -> io::Result<SocketAddr>;
+    fn shutdown(&mut self, how: Shutdown) -> io::Result<()>;
 }
 
 /// A generic version of [std::net::tcp::Incoming] that works on any kind of
@@ -81,7 +82,7 @@ mod adaptors {
 
     use super::{Bindable, Listener, Stream};
     use std::io::{self, Result};
-    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 
     // Delegates
     impl Connectable for TcpStream {
@@ -96,7 +97,10 @@ mod adaptors {
     }
     impl Stream for TcpStream {
         fn peer_addr(&self) -> Result<SocketAddr> {
-            self.peer_addr()
+            TcpStream::peer_addr(self)
+        }
+        fn shutdown(&mut self, how: Shutdown) -> io::Result<()> {
+            TcpStream::shutdown(self, how)
         }
     }
     impl Listener<TcpStream> for TcpListener {

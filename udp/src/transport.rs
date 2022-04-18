@@ -231,6 +231,7 @@ pub struct UdpxStream {
     packets_received: HashMap<u32, PacketTransfer>,
     packets_sent: HashMap<u32, PacketTransfer>,
     next_nseq: u32,
+    closed: bool,           // Whether the connection has been closed at the other end
     err: Option<io::Error>, // Socket error that has been registered during a read/write
 }
 
@@ -250,6 +251,10 @@ impl UdpxStream {
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.sock.local_addr()
+    }
+
+    pub fn shutdown(&mut self) -> io::Result<()> {
+        Stream::shutdown(self, std::net::Shutdown::Both)
     }
 
     fn new(sock: UdpSocket, nseq: u32) -> Self {
@@ -278,6 +283,7 @@ impl UdpxStream {
             packets_received: HashMap::with_capacity(32),
             packets_sent: HashMap::with_capacity(32),
             err: None,
+            closed: false,
         }
     }
 
@@ -352,8 +358,8 @@ impl UdpxStream {
     }
 
     fn write_packet(&mut self, packet: &Packet) -> io::Result<()> {
-        packet.write_to(&mut self.buf[..])?;
-        self.sock.send(&self.buf)?;
+        let n = packet.write_to(&mut self.buf[..])?;
+        self.sock.send(&self.buf[..n])?;
         Ok(())
     }
 
@@ -380,8 +386,8 @@ impl UdpxStream {
             .set_write_timeout(millis(30))
             .expect("Failed to set write timeout");
 
-        ack.write_to(&mut self.buf[..])?;
-        self.sock.send(&self.buf[..])?;
+        let n = ack.write_to(&mut self.buf[..])?;
+        self.sock.send(&self.buf[..n])?;
         Ok(transfer)
     }
 
@@ -402,22 +408,90 @@ impl UdpxStream {
         self.err = Some(err);
         self.copy_of_err().unwrap()
     }
+
+    fn packet_defaults(&self) -> Packet {
+        Packet {
+            peer: self.remote.ip().to_owned(),
+            port: self.remote.port(),
+            ..Default::default()
+        }
+    }
+
+    fn closed_err(&self) -> io::Error {
+        io::Error::new(io::ErrorKind::Other, "UdpxStream connection closed")
+    }
+
+    /// Returns the error, if any, that has been registered on the stream
+    fn registered_err(&self) -> io::Result<()> {
+        if self.closed {
+            Err(self.closed_err())
+        } else if let Some(err) = self.copy_of_err() {
+            Err(err)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Acknowledge that a FIN packet has been sent
+    fn fin_ack(&mut self) -> io::Result<()> {
+        let fin_ack = Packet {
+            ptyp: PacketType::FinAck,
+            ..self.packet_defaults()
+        };
+        self.sock.set_write_timeout(millis(250))?;
+        let n = fin_ack.write_to(&mut self.buf[..])?;
+        self.sock.send(&self.buf[..n])?;
+        Ok(())
+    }
 }
 
 impl Stream for UdpxStream {
     fn peer_addr(&self) -> io::Result<SocketAddr> {
         Ok(SocketAddr::V4(self.remote))
     }
+
+    /// Sends a FIN packet and registers a `StreamClosed` error
+    fn shutdown(&mut self, _: std::net::Shutdown) -> io::Result<()> {
+        let fin = Packet {
+            ptyp: PacketType::Fin,
+            ..self.packet_defaults()
+        };
+        let mut fin_buf = packet_buffer();
+        let n = fin.write_to(&mut fin_buf[..])?;
+        let fin = &fin_buf[..n];
+
+        // 10 tries to receive a FIN-ACK
+        for _ in 0..10 {
+            self.sock.set_write_timeout(millis(100))?;
+            match self.sock.send(fin) {
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => continue,
+                Err(e) => return Err(e),
+            }
+
+            // Await FIN-ACK
+            self.sock.set_read_timeout(millis(30))?;
+            match self.sock.recv(&mut self.buf[..]) {
+                Ok(n) => match Packet::try_from(&self.buf[..n])?.ptyp {
+                    PacketType::FinAck | PacketType::Fin => break,
+                    _ => continue,
+                },
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => continue,
+                // Err(e) => return Err(e),
+                _ => break, // For now, let's say that recv errors mean we can close
+            };
+        }
+        self.closed = true;
+        Ok(())
+    }
 }
 
 impl Read for UdpxStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if let Some(err) = self.copy_of_err() {
-            return Err(err);
-        }
-
         let mut red = 0;
         while red < buf.len() {
+            self.registered_err()?;
+
             // TODO: for now we will wait forever
             // We will only try reading for a short period of time
             // self.sock.set_read_timeout(millis(50))?;
@@ -453,9 +527,13 @@ impl Read for UdpxStream {
                     let transfer: PacketTransfer =
                         Packet::try_from(&self.buf[..n]).wrap_malpac()?.into();
 
-                    // If this is not the packet we are looking for, then
-                    // buffer it and try again
-                    if transfer.packet.nseq < self.next_nseq {
+                    if transfer.packet.ptyp == PacketType::Fin {
+                        // Then the connection was closed at the other end.
+                        // Terminate this part of the connection
+                        self.closed = true;
+                        self.fin_ack()?;
+                        return Ok(red);
+                    } else if transfer.packet.nseq < self.next_nseq {
                         // Then we have already acked this packet, this is a
                         // resent packet and our ack got dropped
                         self.acknowledge_packet(transfer)?;
@@ -496,9 +574,7 @@ impl Read for UdpxStream {
 
 impl Write for UdpxStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if let Some(err) = self.copy_of_err() {
-            return Err(err);
-        }
+        self.registered_err()?;
 
         // Queue up the packets to be written
         self.packets_sent.extend(
@@ -523,8 +599,8 @@ impl Write for UdpxStream {
                 );
 
                 self.sock.set_write_timeout(millis(30)).unwrap();
-                transfer.packet.write_to(&mut self.buf[..]).unwrap();
-                match self.sock.send(&self.buf) {
+                let n = transfer.packet.write_to(&mut self.buf[..]).unwrap();
+                match self.sock.send(&self.buf[..n]) {
                     Ok(_) => {}
                     Err(e) if e.kind() == ErrorKind::TimedOut => continue,
                     Err(e) => return Err(self.register_err(e)),
@@ -545,7 +621,7 @@ impl Write for UdpxStream {
                     Ok(n) => Packet::try_from(&self.buf[..n]).wrap_malpac()?,
                     Err(e) if e.kind() == ErrorKind::TimedOut => break,
                     Err(e) => {
-                        log::error!("UdpxStream::write(): {}", e);
+                        log::error!("UdpxStream::write(): ({:?}) {}", e.kind(), e);
                         log::error!("self = {}", self);
                         log::error!("sock = {:?}", self.sock);
                         return Err(self.register_err(e));

@@ -83,6 +83,7 @@ fn test_read() {
     let mut sock = UdpxStream::connect(addr).unwrap();
     let msg = b"Hello world!";
     sock.write_all(msg).unwrap();
+    sock.shutdown().unwrap();
 
     // The server should now have reported the message it read
     let server_msg = msgrecv
