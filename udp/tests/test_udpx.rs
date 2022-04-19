@@ -69,7 +69,8 @@ fn test_concurrent_handshakes() {
 /// Codegen for [assert_echo] tests
 ///
 /// # Examples
-/// ```
+///
+/// ```ignore
 /// test_echo! { test_echo_small: "Hello world!" }
 /// ```
 macro_rules! test_echo {($($name:ident: $msg:expr,)*) => {$(
