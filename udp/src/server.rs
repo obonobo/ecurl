@@ -17,9 +17,14 @@ use threadpool::ThreadPool;
 use crate::{
     bullshit_scanner::BullshitScanner,
     errors::ServerError,
-    html::template,
+    // html::template,
+    html::Templater,
     parse::{parse_http_request, Method, Request},
-    trait_alias, Bindable, Incoming, Listener, Stream,
+    trait_alias,
+    Bindable,
+    Incoming,
+    Listener,
+    Stream,
 };
 
 trait_alias! {
@@ -27,7 +32,7 @@ trait_alias! {
     pub trait Threadsafe = Send + 'static;
 
     /// A [Stream] that can be passed between threads
-    pub trait ThreadsafeStream = Stream + Threadsafe;
+    pub trait ThreadsafeStream = Stream + Threadsafe + Templater;
 
     /// A [Listener] that emits [ThreadsafeStreams](ThreadsafeStream) and is
     /// itself threadsafe
@@ -239,7 +244,7 @@ impl ServerRunner {
 }
 
 /// Routes requests to the appropriate handler
-fn handle_connection<S: Stream>(stream: &mut S, dir: &str) -> Result<(), ServerError> {
+fn handle_connection<S: ThreadsafeStream>(stream: &mut S, dir: &str) -> Result<(), ServerError> {
     // let mut reader = BufReader::with_capacity(BUFSIZE, stream.as_ref());
     let scnr = BullshitScanner::new(stream).ignoring_eof();
     let mut req = parse_http_request(scnr)?;
@@ -347,11 +352,11 @@ fn accept_file_upload(filename: &str, body: &mut dyn Read) -> Result<(), ServerE
     std::io::copy(body, &mut fh).map(|_| ()).map_err(wrap)
 }
 
-fn write_dir_listing<S: Stream>(stream: &mut S, dir: &str) -> Result<(), ServerError> {
+fn write_dir_listing<S: ThreadsafeStream>(stream: &mut S, dir: &str) -> Result<(), ServerError> {
     log::debug!("Listing directory {}", dir);
 
     // Gather a list of files and inject it into the template
-    let template = template(
+    let template = stream.template(
         fs::read_dir(dir)
             .map_err(wrap)?
             .flat_map(Result::ok)

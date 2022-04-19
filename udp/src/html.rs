@@ -1,16 +1,32 @@
-///
-/// This module contains the webpage stuff for the dir listing of the file
-/// server
-///
+//! This module contains the webpage stuff for the dir listing of the file
+//! server
 
-/// Template generation - insert a list of file names as links into our html doc
-pub fn template(files: impl IntoIterator<Item = String>) -> String {
-    let links = files
-        .into_iter()
-        .map(|file| format!("    <a href=\"{}\">{}</a>\n", file, file))
-        .collect::<String>();
+use std::net::TcpStream;
 
-    HTML.replacen("    {LINKS}", links.as_str(), 1)
+use crate::transport::{JoinIter, UdpxStream};
+
+/// Polymorphic [template] function.
+///
+/// This is a tool for swapping the template implementation depending on if we
+/// are using TCP or UDPx.
+pub trait Templater {
+    fn template(&self, files: impl IntoIterator<Item = String>) -> String;
+}
+
+impl Templater for TcpStream {
+    fn template(&self, files: impl IntoIterator<Item = String>) -> String {
+        let links = files
+            .into_iter()
+            .map(|file| format!("    <a href=\"{}\">{}</a>\n", file, file))
+            .collect::<String>();
+        HTML.replacen("    {LINKS}", links.as_str(), 1)
+    }
+}
+
+impl Templater for UdpxStream {
+    fn template(&self, files: impl IntoIterator<Item = String>) -> String {
+        files.into_iter().join("\n")
+    }
 }
 
 /// This is the html document that is returned by the dir listing function
