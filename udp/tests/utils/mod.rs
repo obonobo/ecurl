@@ -235,9 +235,28 @@ impl Default for LoggingInitializer {
 }
 
 pub mod simple_udpx {
-    use std::{net::SocketAddr, sync::mpsc, thread, time::Duration};
+    use std::{
+        io,
+        net::SocketAddr,
+        sync::mpsc::{self, Receiver},
+        thread,
+        time::Duration,
+    };
 
-    use udpx::{transport::UdpxListener, util, Bindable, Listener};
+    use udpx::{
+        transport::UdpxListener,
+        util::{self, Chug},
+        Bindable, Listener,
+    };
+
+    pub fn echo_server() -> (SocketAddr, Receiver<io::Result<String>>) {
+        let (msgsend, msgrecv) = mpsc::channel();
+        let addr = serve(move |mut l| {
+            let msg = l.accept().map(|s| s.0).map(Chug::must_chug);
+            msgsend.send(msg).expect("Server failed to report results");
+        });
+        (addr, msgrecv)
+    }
 
     /// Spins up a simple UDPx server on a random address using the provided
     /// handler

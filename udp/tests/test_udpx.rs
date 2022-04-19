@@ -1,7 +1,6 @@
 mod utils;
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::{io::Write, sync::mpsc, thread, time::Duration};
-use udpx::{transport::UdpxStream, util::Chug, Listener};
+use udpx::{transport::UdpxStream, Listener};
 pub use utils::*;
 
 /// Tests the UDPx handshake. This test spins up a ServerDropper and attempts to
@@ -91,13 +90,7 @@ test_echo! {
 /// A parameterized test function that does one round trip sending the provided
 /// message
 fn assert_echo(msg: &str, chunkify: usize) {
-    // Start a server thread
-    let (msgsend, msgrecv) = mpsc::channel();
-    let addr = simple_udpx::serve(move |mut l| {
-        // let msg = l.accept().map(|s| s.0).map(read_all);
-        let msg = l.accept().map(|s| s.0).map(Chug::must_chug);
-        msgsend.send(msg).expect("Server failed to report results");
-    });
+    let (addr, msgrecv) = simple_udpx::echo_server();
 
     // Try to write a message to the server
     let mut sock = UdpxStream::connect(addr).unwrap();
