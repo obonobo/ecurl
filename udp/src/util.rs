@@ -4,9 +4,8 @@ pub use funcs::*;
 mod funcs {
     use crate::{ANY_PORT, LOCALHOST};
     use std::{
-        fmt::{Display, Write},
+        fmt::Display,
         io::{self, Read},
-        str,
         time::Duration,
     };
 

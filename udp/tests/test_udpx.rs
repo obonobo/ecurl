@@ -76,28 +76,21 @@ fn test_concurrent_handshakes() {
 macro_rules! test_echo {($($name:ident: $msg:expr,)*) => {$(
     #[test]
     fn $name() {
+        let (msg, chunkify) = $msg;
         LOGS.initialize();
-        assert_echo(&$msg);
+        assert_echo(&msg, chunkify);
     }
 )*};}
 
 test_echo! {
-    test_echo_small: "Hello world!",
-    test_echo_big: "Hello world!".repeat(1024),
-    test_echo_very_big: random_string(1<<20),
-}
-
-fn random_string(n: usize) -> String {
-    thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(n)
-        .map(char::from)
-        .collect::<String>()
+    test_echo_small: ("Hello world!", 0),
+    test_echo_big: ("Hello world!".repeat(1024), 0),
+    test_echo_very_big: (random_string(1<<20), 2048),
 }
 
 /// A parameterized test function that does one round trip sending the provided
 /// message
-fn assert_echo(msg: &str) {
+fn assert_echo(msg: &str, chunkify: usize) {
     // Start a server thread
     let (msgsend, msgrecv) = mpsc::channel();
     let addr = simple_udpx::serve(move |mut l| {
@@ -109,7 +102,11 @@ fn assert_echo(msg: &str) {
     // Try to write a message to the server
     let mut sock = UdpxStream::connect(addr).unwrap();
     let msg = msg.as_bytes();
-    msg.chunks(1 << 10).for_each(|b| sock.write_all(b).unwrap());
+    if chunkify > 0 {
+        msg.chunks(1 << 10).for_each(|b| sock.write_all(b).unwrap());
+    } else {
+        sock.write_all(msg).unwrap();
+    }
     sock.shutdown().unwrap();
 
     // The server should now have reported the message it read

@@ -262,3 +262,11 @@ pub mod simple_udpx {
             .expect("Timed out while waiting for server to report its address")
     }
 }
+
+pub fn random_string(n: usize) -> String {
+    thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(n)
+        .map(char::from)
+        .collect::<String>()
+}
