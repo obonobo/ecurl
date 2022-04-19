@@ -463,6 +463,7 @@ fn write_file<S: Stream>(stream: &mut S, mut fh: File, filename: &str) -> Result
     )
 }
 
+#[allow(dead_code)]
 fn write_500<S: Stream>(stream: &mut S, msg: &str) {
     if let Err(e) = write_response(
         stream,

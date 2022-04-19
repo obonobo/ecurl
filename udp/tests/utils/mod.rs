@@ -3,14 +3,12 @@ use std::{
     fs,
     io::{Error, Write},
     net::{IpAddr, TcpListener, TcpStream},
-    sync::atomic::{AtomicBool, Ordering},
 };
 
 use udpx::{
     errors::ServerError,
     server::{Handle, Server, ThreadsafeBindable, ThreadsafeListener, ThreadsafeStream},
     transport::{UdpxListener, UdpxStream},
-    util::logging::init_logging,
 };
 
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
