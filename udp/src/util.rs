@@ -195,20 +195,6 @@ pub mod logging {
 }
 
 /// A macro that creates a trait alias
-///
-/// # Examples
-///
-/// ```
-/// trait_alias! { pub Threadable = Send + Sync + 'static; }
-///
-/// // Creates the following code:
-/// pub trait Threadable: Send + Sync + 'static {}
-/// impl<T: Send + Sync + 'static> Threadable for T {}
-///
-/// // Can be used like so:
-/// fn do_something<T: Threadable>(param: T) {}
-/// do_something("Must implement Send + Sync + 'static!!!")
-/// ```
 #[macro_export]
 macro_rules! trait_alias {
     () => {};
