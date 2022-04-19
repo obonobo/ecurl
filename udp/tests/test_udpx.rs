@@ -1,6 +1,7 @@
 mod utils;
+use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::{io::Write, sync::mpsc, thread, time::Duration};
-use udpx::{server, transport::UdpxStream, util::read_all, Listener};
+use udpx::{transport::UdpxStream, util::read_all, Listener};
 pub use utils::*;
 
 /// Tests the UDPx handshake. This test spins up a ServerDropper and attempts to
@@ -83,7 +84,15 @@ macro_rules! test_echo {($($name:ident: $msg:expr,)*) => {$(
 test_echo! {
     test_echo_small: "Hello world!",
     test_echo_big: "Hello world!".repeat(1024),
-    test_echo_very_big: "Hello world!".repeat(1<<20),
+    test_echo_very_big: random_string(1<<20),
+}
+
+fn random_string(n: usize) -> String {
+    thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(n)
+        .map(char::from)
+        .collect::<String>()
 }
 
 /// A parameterized test function that does one round trip sending the provided
@@ -109,14 +118,15 @@ fn assert_echo(msg: &str) {
         .expect("Server failed to properly receive the message");
 
     let msg_debug = msg.iter().map(|b| char::from(*b)).collect::<String>();
-    println!("original msg: {}", msg_debug);
-    println!("new msg: {}", server_msg);
-    println!("equal? {}", msg_debug == server_msg);
-    println!(
-        "original len = {}, new len = {}",
-        msg_debug.len(),
-        server_msg.len()
-    );
-
-    assert_eq!(msg, server_msg.as_bytes(), "not equal");
+    if msg != server_msg.as_bytes() {
+        println!("original msg: {}", msg_debug);
+        println!("new msg: {}", server_msg);
+        println!("equal? {}", msg_debug == server_msg);
+        println!(
+            "original len = {}, new len = {}",
+            msg_debug.len(),
+            server_msg.len()
+        );
+    }
+    assert_eq!(msg, server_msg.as_bytes());
 }

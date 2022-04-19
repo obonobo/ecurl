@@ -566,6 +566,7 @@ impl Read for UdpxStream {
                         // Then the connection was closed at the other end.
                         // Terminate this part of the connection
                         log::debug!("UdpxStream::read(): got a FIN packet ({})", transfer.packet);
+                        self.last_nseq = Some(transfer.packet.nseq);
                         self.closed = true;
                         self.fin_ack()?;
                         let done = self.cannot_read_anymore();
