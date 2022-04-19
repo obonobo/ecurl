@@ -91,6 +91,10 @@ super::basic_error!(UnsupportedProtoError, "Unsupported protocol");
 super::basic_error!(UnsupportedMethodError, "Unsupported HTTP method");
 super::basic_error!(WritingToDirectoryError, "File exists and is a directory");
 super::basic_error!(WritingToSymlinkError, "File exists and is a symlink");
+super::basic_error!(
+    UdpxConnectionClosed,
+    "Trying to read from a closed UdpxStream"
+);
 
 #[derive(Debug)]
 pub struct HttpParseError(pub String);

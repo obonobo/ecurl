@@ -438,6 +438,16 @@ impl UdpxStream {
         }
     }
 
+    fn maybe_registered_err(&mut self, red: usize) -> Option<Result<usize, Error>> {
+        if let Err(e) = self.registered_err() {
+            if red > 0 || e.to_string().contains("UdpxStream connection closed") {
+                return Some(Ok(red));
+            }
+            return Some(Err(e));
+        }
+        None
+    }
+
     fn is_closed(&self) -> bool {
         let filter = self.last_nseq.filter(|n| self.next_nseq >= *n);
         self.closed && filter.is_some()
@@ -518,7 +528,10 @@ impl Read for UdpxStream {
         let mut red = 0;
         let mut skipped = MAX_SKIPPED;
         while red < buf.len() && skipped > 0 {
-            self.registered_err()?;
+            // self.registered_err()?;
+            if let Some(value) = self.maybe_registered_err(red) {
+                return value;
+            }
 
             // TODO: for now we will wait forever
             // We will only try reading for a short period of time
@@ -601,7 +614,7 @@ impl Read for UdpxStream {
             // packet, return it back to the queue and don't increment
             // next_seq
             let n = std::cmp::min(transfer.packet.data.len(), buf.len() - red);
-            let into = &mut buf[red..n];
+            let into = &mut buf[red..red + n];
             let from = &transfer.packet.data[..n];
             into.copy_from_slice(from);
             red += n;
@@ -642,7 +655,10 @@ impl Write for UdpxStream {
         let mut skipped = MAX_SKIPPED;
         let mut n = 0;
         while !self.packets_sent.is_empty() && skipped > 0 {
-            self.registered_err()?;
+            // self.registered_err()?;
+            if let Some(value) = self.maybe_registered_err(n) {
+                return value;
+            }
 
             // Send/resend packets
             for transfer in self.packets_sent.values() {

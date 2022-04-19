@@ -1,6 +1,6 @@
 use udpx::{
     transport::UdpxListener,
-    util::{config::err_to_exit_code, constants::EXIT_OKAY, read_all},
+    util::{config::err_to_exit_code, constants::EXIT_OKAY, Chug},
     Bindable, Incoming, Stream,
 };
 
@@ -12,7 +12,7 @@ fn server_main(_: ServerConfig) -> Result<i32, i32> {
         let stream = stream.unwrap();
         let peer_addr = stream.peer_addr().unwrap();
         log::info!("SERVER: Made a connection with {}", peer_addr);
-        let red = read_all(stream);
+        let red = stream.must_chug();
         log::info!("SERVER: {}", red)
     }
     Ok(EXIT_OKAY)
