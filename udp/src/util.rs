@@ -148,6 +148,10 @@ pub mod config {
                 /// serve at.
                 #[clap(short, long, default_value_t = 8080)]
                 pub port: u16,
+
+                /// Proxy configuration (for use with router.go)
+                #[clap(long)]
+                pub proxy: Option<std::net::SocketAddrV4>,
             }
 
             impl $name {
@@ -171,11 +175,12 @@ pub mod config {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                     write!(
                         f,
-                        "{}: verbose={}, dir={}, port={}",
+                        "{}: verbose={}, dir={}, port={}, proxy={:?}",
                         std::any::type_name::<Self>(),
                         self.verbose,
                         self.dir,
-                        self.port
+                        self.port,
+                        self.proxy,
                     )
                 }
             }

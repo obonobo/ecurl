@@ -37,20 +37,31 @@ pub struct UdpxListener {
 
     /// Whether the listener has been set to be nonblocking
     nonblocking: bool,
+
+    /// The router proxy to use
+    proxy: Option<SocketAddrV4>,
 }
 
 impl Bindable<UdpxStream> for UdpxListener {
     fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
+        Self::bind_with_proxy(addr, None)
+    }
+}
+
+impl UdpxListener {
+    pub fn bind_with_proxy(
+        addr: impl ToSocketAddrs,
+        proxy: Option<SocketAddrV4>,
+    ) -> io::Result<Self> {
         Ok(Self {
             sock: UdpSocket::bind(addr)?,
             buf: packet_buffer(),
             timeout: DEFAULT_TIMEOUT,
             nonblocking: false,
+            proxy,
         })
     }
-}
 
-impl UdpxListener {
     pub fn with_timeout(self, timeout: u64) -> Self {
         Self { timeout, ..self }
     }
@@ -170,7 +181,7 @@ impl Listener<UdpxStream> for UdpxListener {
         let (n, addr) = self.sock.recv_from(&mut self.buf)?;
         let packet = Packet::try_from(&self.buf[..n])?;
         let (packet, nseq, sock) = self.handshake(addr, &packet)?;
-        let stream = UdpxStream::new(sock, nseq).with_starting_data([packet]);
+        let stream = UdpxStream::new(sock, nseq, self.proxy).with_starting_data([packet]);
         log::debug!("handshake completed with addr {}", addr);
         Ok((stream, addr))
     }
@@ -232,6 +243,7 @@ pub struct UdpxStream {
     closed: bool,           // Whether the connection has been closed at the other end
     err: Option<io::Error>, // Socket error that has been registered during a read/write
     last_nseq: Option<u32>,
+    proxy: Option<SocketAddrV4>,
 }
 
 impl Drop for UdpxStream {
@@ -242,7 +254,7 @@ impl Drop for UdpxStream {
 
 impl Connectable for UdpxStream {
     fn connect(addr: impl ToSocketAddrs) -> io::Result<Self> {
-        Self::new(Self::random_socket()?, Self::FIRST_NSEQ).handshake(addr)
+        Self::connect_with_proxy(addr, None)
     }
 }
 
@@ -254,6 +266,13 @@ impl UdpxStream {
         Connectable::connect(addr)
     }
 
+    pub fn connect_with_proxy(
+        addr: impl ToSocketAddrs,
+        proxy: Option<SocketAddrV4>,
+    ) -> io::Result<Self> {
+        Self::new(Self::random_socket()?, Self::FIRST_NSEQ, proxy).handshake(addr)
+    }
+
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.sock.local_addr()
     }
@@ -262,7 +281,7 @@ impl UdpxStream {
         Stream::shutdown(self, std::net::Shutdown::Both)
     }
 
-    fn new(sock: UdpSocket, nseq: u32) -> Self {
+    fn new(sock: UdpSocket, nseq: u32, proxy: Option<SocketAddrV4>) -> Self {
         let remote = sock
             .peer_addr()
             .and_then(|ip| match ip {
@@ -290,6 +309,7 @@ impl UdpxStream {
             err: None,
             closed: false,
             last_nseq: None,
+            proxy,
         }
     }
 
