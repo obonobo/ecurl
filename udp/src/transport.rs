@@ -528,7 +528,6 @@ impl Read for UdpxStream {
         let mut red = 0;
         let mut skipped = MAX_SKIPPED;
         while red < buf.len() && skipped > 0 {
-            // self.registered_err()?;
             if let Some(value) = self.maybe_registered_err(red) {
                 return value;
             }
