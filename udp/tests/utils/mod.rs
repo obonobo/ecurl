@@ -207,33 +207,6 @@ impl<T: Display, E: Display> Display for DisplayResult<T, E> {
     }
 }
 
-pub static LOGS: LoggingInitializer = LoggingInitializer::new();
-
-pub struct LoggingInitializer {
-    initialized: AtomicBool,
-}
-
-impl LoggingInitializer {
-    pub const fn new() -> Self {
-        Self {
-            initialized: AtomicBool::new(false),
-        }
-    }
-
-    pub fn initialize(&self) {
-        if !self.initialized.load(Ordering::SeqCst) {
-            self.initialized.store(true, Ordering::SeqCst);
-            init_logging(true);
-        }
-    }
-}
-
-impl Default for LoggingInitializer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub mod simple_udpx {
     use std::{
         io,

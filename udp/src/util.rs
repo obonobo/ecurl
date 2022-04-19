@@ -1,7 +1,9 @@
 //! A package for configuring logging, used in both the client and the server
 
-pub use funcs::*;
-mod funcs {
+pub use misc::*;
+
+/// Misc. utilities
+mod misc {
     use crate::{ANY_PORT, LOCALHOST};
     use std::{
         fmt::Display,
@@ -189,6 +191,8 @@ pub mod constants {
 
 /// Logging utilities
 pub mod logging {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     pub const LOGGING_ENV_VARIABLE: &str = "UDPX_LOG_LEVEL";
     pub const DEFAULT_LOG_LEVEL: &str = "info";
     pub const VERBOSE_LOG_LEVEL: &str = "debug";
@@ -201,10 +205,17 @@ pub mod logging {
         });
     }
 
+    static INITIALIZED: AtomicBool = AtomicBool::new(false);
     pub fn init_logging_with_level(level: &str) {
-        env_logger::init_from_env(
-            env_logger::Env::default().filter_or(LOGGING_ENV_VARIABLE, level),
-        );
+        if !INITIALIZED.swap(true, Ordering::SeqCst) {
+            env_logger::init_from_env(
+                env_logger::Env::default().filter_or(LOGGING_ENV_VARIABLE, level),
+            );
+        } else {
+            log::error!(
+                "logging::init_logging_with_level(): env_logger cannot be initialized twice"
+            );
+        }
     }
 }
 

@@ -1,13 +1,13 @@
 mod utils;
 use std::{io::Write, sync::mpsc, thread, time::Duration};
-use udpx::{transport::UdpxStream, Listener};
+use udpx::{transport::UdpxStream, util::logging::init_logging, Listener};
 pub use utils::*;
 
 /// Tests the UDPx handshake. This test spins up a ServerDropper and attempts to
 /// start a handshake
 #[test]
 fn test_handshake() {
-    LOGS.initialize();
+    init_logging(true);
     let handle = ServerDropper::udpxserver();
     let addr = handle.addr();
     UdpxStream::connect(addr).unwrap();
@@ -17,7 +17,7 @@ fn test_handshake() {
 /// the [ServerDropper] does)
 #[test]
 fn test_handshake_raw() {
-    LOGS.initialize();
+    init_logging(true);
 
     // Spin up a UDPx server that does 1 handshake
     let (errsend, errecv) = mpsc::channel();
@@ -41,7 +41,7 @@ fn test_handshake_raw() {
 /// time
 #[test]
 fn test_concurrent_handshakes() {
-    LOGS.initialize();
+    init_logging(true);
     let handle = ServerDropper::udpxserver();
     let addr = handle.addr();
     let (resin, resout) = mpsc::channel();
@@ -75,8 +75,8 @@ fn test_concurrent_handshakes() {
 macro_rules! test_echo {($($name:ident: $msg:expr,)*) => {$(
     #[test]
     fn $name() {
+        init_logging(true);
         let (msg, chunkify) = $msg;
-        LOGS.initialize();
         assert_echo(&msg, chunkify);
     }
 )*};}
