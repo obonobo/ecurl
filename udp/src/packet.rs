@@ -260,6 +260,7 @@ pub enum PacketType {
     Nak,
     Data,
     Fin,
+    Flush,
     FinAck,
     Invalid,
 }
@@ -281,6 +282,7 @@ impl From<&str> for PacketType {
             "nak" => Self::Nak,
             "fin" => Self::Fin,
             "finack" | "fin-ack" => Self::FinAck,
+            "flush" => Self::Flush,
             _ => Self::Data,
         }
     }
@@ -296,6 +298,7 @@ impl From<u8> for PacketType {
             4 => Self::Data,
             5 => Self::Fin,
             6 => Self::FinAck,
+            7 => Self::Flush,
             _ => Self::Invalid,
         }
     }
@@ -311,6 +314,7 @@ impl From<PacketType> for u8 {
             PacketType::Data => 4,
             PacketType::Fin => 5,
             PacketType::FinAck => 6,
+            PacketType::Flush => 7,
             PacketType::Invalid => u8::MAX,
         }
     }

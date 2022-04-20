@@ -30,6 +30,7 @@ fn get(cfg: &ClientConfig, addr: SocketAddrV4, file: String) -> std::io::Result<
     let remote = addr;
     let mut conn = UdpxStream::connect_with_proxy(remote, cfg.proxy)?;
     conn.write_all(format!("GET {} HTTP/1.1\r\n\r\n", file).as_bytes())?;
+    conn.do_flush()?;
     let got = conn.borrow_chug()?;
     conn.shutdown()?;
     Ok(got)
@@ -47,6 +48,7 @@ fn post(cfg: &ClientConfig, addr: SocketAddrV4, file: String) -> std::io::Result
         )
         .as_bytes(),
     )?;
+    conn.do_flush()?;
     let posted = conn.borrow_chug()?;
     conn.shutdown()?;
     Ok(posted)

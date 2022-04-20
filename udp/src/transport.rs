@@ -291,6 +291,7 @@ pub struct UdpxStream {
     last_nseq: Option<u32>,
     proxy: Option<SocketAddrV4>,
     handshake_ack: Option<Packet>,
+    got_flush: bool,
 }
 
 impl Drop for UdpxStream {
@@ -364,6 +365,7 @@ impl UdpxStream {
             last_nseq: None,
             proxy,
             handshake_ack: None,
+            got_flush: false,
         }
     }
 
@@ -549,8 +551,12 @@ impl UdpxStream {
     }
 
     fn is_closed(&self) -> bool {
-        let filter = self.last_nseq.filter(|n| self.next_nseq >= *n);
-        self.closed && filter.is_some()
+        let last = self.received_last_packet();
+        self.closed && last
+    }
+
+    fn received_last_packet(&self) -> bool {
+        self.last_nseq.filter(|n| self.next_nseq >= *n).is_some()
     }
 
     fn cannot_read_anymore(&self) -> bool {
@@ -572,28 +578,17 @@ impl UdpxStream {
         Ok(())
     }
 
-    fn do_read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.sock.set_read_timeout(None)?;
-
-        let mut red = 0;
-
-        let mut read_buf = packet_buffer();
-        let n = self.sock.recv(&mut read_buf[..])?;
-        let packet = Packet::try_from(&read_buf[..n]).expect("Malformed packet");
-        log::debug!("Read packet: {}", packet);
-        match packet.ptyp {
-            PacketType::Data => {
-                log::debug!("Got a DATA packet");
-            }
-            PacketType::Fin => todo!(),
-            _ => panic!("Invalid packet {}", packet),
+    pub fn do_flush(&mut self) -> io::Result<()> {
+        self.sock.set_write_timeout(millis(50))?;
+        let fin_ack = Packet {
+            ptyp: PacketType::Flush,
+            ..self.packet_defaults()
+        };
+        let n = fin_ack.write_to(&mut self.buf[..])?;
+        for _ in 0..100 {
+            let _ = self.sock.send(&self.buf[..n]); // ignore
         }
-
-        todo!()
-    }
-
-    fn do_write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        todo!()
+        Ok(())
     }
 }
 
@@ -637,14 +632,14 @@ impl Stream for UdpxStream {
         let fin = Packet {
             ptyp: PacketType::Fin,
             nseq: {
-                if let Some(n) = self.last_nseq {
-                    n
-                } else {
-                    let last_nseq = self.next_nseq;
-                    self.last_nseq = Some(last_nseq);
-                    self.next_nseq += 1;
-                    last_nseq
-                }
+                // if let Some(n) = self.last_nseq {
+                //     n
+                // } else {
+                let last_nseq = self.next_nseq;
+                self.last_nseq = Some(last_nseq);
+                self.next_nseq += 1;
+                last_nseq
+                // }
             },
             ..self.packet_defaults()
         };
@@ -741,10 +736,10 @@ impl Read for UdpxStream {
                         Err(e) if e.kind() == ErrorKind::WouldBlock => {
                             log::error!("UdpxStream::read(): {}", e);
 
-                            // if red > 0 {
-                            //     log::error!("UdpxStream::read(): we've already read some data, returning that now");
-                            //     return Ok(red);
-                            // }
+                            if red > 0 {
+                                log::error!("UdpxStream::read(): we've already read some data, returning that now");
+                                return Ok(red);
+                            }
 
                             if skipped > 1 {
                                 log::error!("Skipping this error...");
@@ -771,6 +766,26 @@ impl Read for UdpxStream {
 
                     let transfer: PacketTransfer =
                         Packet::try_from(&self.buf[..n]).wrap_malpac()?.into();
+
+                    if transfer.packet.ptyp == PacketType::Flush {
+                        // Then the client has sent all that he will send at
+                        // this point...
+                        log::debug!("Received FLUSH packet: {}", transfer.packet);
+                        if self.got_flush {
+                            log::debug!("This is a duplice FLUSH, discarding...");
+                        } else {
+                            log::debug!("Setting FLUSH state");
+                            self.got_flush = true;
+                            self.last_nseq = Some(transfer.packet.nseq);
+                            if self.next_nseq >= transfer.packet.nseq {
+                                log::debug!(
+                                    "Final packet has already been consumed, returning from read"
+                                );
+                                return Ok(red);
+                            }
+                            // return Ok(red);
+                        }
+                    }
 
                     if transfer.packet.ptyp == PacketType::Fin {
                         // Then the connection was closed at the other end.
@@ -820,6 +835,9 @@ impl Read for UdpxStream {
             if transfer.packet.data.is_empty() {
                 // This packet has been fully read, we can now drop it entirely
                 self.next_nseq += 1;
+                if self.received_last_packet() {
+                    return Ok(red);
+                }
             } else {
                 // Then return this packet to the queue, we are not finished
                 // reading it
@@ -1018,6 +1036,8 @@ impl Write for UdpxStream {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        // Spams a FLUSH packet
+
         Ok(())
     }
 }
