@@ -22,6 +22,7 @@ use crate::{
     parse::{parse_http_request, Method, Request},
     trait_alias,
     transport::UdpxListener,
+    util::Chug,
     Bindable,
     Incoming,
     Listener,
@@ -324,7 +325,14 @@ impl ServerRunner {
 /// Routes requests to the appropriate handler
 fn handle_connection<S: ThreadsafeStream>(stream: &mut S, dir: &str) -> Result<(), ServerError> {
     // let mut reader = BufReader::with_capacity(BUFSIZE, stream.as_ref());
+
+    // TODO: DEBUG
+    // let chugged = stream.borrow_chug().map_err(ServerError::wrap_err)?;
+    // let mut reader = chugged.as_bytes();
+    // let scnr = BullshitScanner::new(&mut reader).ignoring_eof();
+    // TODO: DEBUG
     let scnr = BullshitScanner::new(stream).ignoring_eof();
+
     let mut req = parse_http_request(scnr)?;
     log::info!("{}", req);
 
