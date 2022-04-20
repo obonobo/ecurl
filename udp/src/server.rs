@@ -238,6 +238,11 @@ impl ServerRunner {
                             // write_500(&mut stream, &format!("{}", e));
                         }
                     };
+                    log::debug!("Server: shutting down stream ({})", stream);
+                    match stream.shutdown() {
+                        Ok(_) => log::debug!("Shutdown successful"),
+                        Err(e) => log::error!("Shutdown failed: {}", e),
+                    };
                 })
             }
 

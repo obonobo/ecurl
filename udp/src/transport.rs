@@ -468,6 +468,11 @@ impl UdpxStream {
 
     /// Sends an ACK for this packet
     fn acknowledge_packet(&mut self, transfer: PacketTransfer) -> io::Result<PacketTransfer> {
+        log::debug!(
+            "Acknowledging packet {} is well received",
+            transfer.packet.nseq
+        );
+
         let ack = Packet {
             ptyp: PacketType::Ack,
             nseq: transfer.packet.nseq,
@@ -487,6 +492,10 @@ impl UdpxStream {
 
     fn buffer_and_ack(&mut self, transfer: PacketTransfer) -> io::Result<()> {
         self.acknowledge_packet(transfer).map(|t| {
+            log::debug!(
+                "Received and ACKed packet {}, placing it in receive buffer now",
+                t.packet.nseq
+            );
             self.packets_received.insert(t.packet.nseq, t);
         })
     }
@@ -590,6 +599,14 @@ impl Stream for UdpxStream {
         let _debug_remote = format!("{}", self.remote);
 
         log::debug!("Shutting down UpdxStream...");
+
+        if self.cannot_read_anymore() {
+            log::debug!(
+                "Shutdown attempted, but this stream has already been closed from the other end"
+            );
+            return Ok(());
+        }
+
         let fin = Packet {
             ptyp: PacketType::Fin,
             nseq: {
@@ -691,6 +708,12 @@ impl Read for UdpxStream {
                         Err(e) if e.kind() == ErrorKind::TimedOut => return Ok(red),
                         Err(e) if e.kind() == ErrorKind::WouldBlock => {
                             log::error!("UdpxStream::read(): {}", e);
+
+                            if red > 0 {
+                                log::error!("UdpxStream::read(): we've already read some data, returning that now");
+                                return Ok(red);
+                            }
+
                             if skipped > 1 {
                                 log::error!("Skipping this error...");
                             }

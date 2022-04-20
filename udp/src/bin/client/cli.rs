@@ -4,11 +4,34 @@ use std::str::FromStr;
 
 use udpx::packet::{Packet, PacketType};
 use udpx::transport::UdpxStream;
+use udpx::util::constants::EXIT_NOT_OKAY;
 use udpx::util::Chug;
 use udpx::util::{config::err_to_exit_code, constants::EXIT_OKAY};
 
 udpx::cli_binary!(ClientConfig, client_main);
-fn client_main(_: ClientConfig) -> Result<i32, i32> {
+
+fn client_main(cfg: ClientConfig) -> Result<i32, i32> {
+    let got = get(&cfg).map_err(|_| EXIT_NOT_OKAY)?;
+    println!("{}", got);
+    Ok(EXIT_OKAY)
+}
+
+fn get(cfg: &ClientConfig) -> std::io::Result<String> {
+    let remote = SocketAddrV4::from_str("127.0.0.1:8080").unwrap();
+    log::debug!("remote: {}", remote);
+
+    let mut conn = UdpxStream::connect_with_proxy(remote, cfg.proxy)?;
+    conn.write_all(b"GET /Makefile HTTP/1.1\r\n\r\n")?;
+    let got = conn.borrow_chug()?;
+    conn.shutdown()?;
+    Ok(got)
+}
+
+fn post() -> std::io::Result<String> {
+    todo!()
+}
+
+fn client_main2(_: ClientConfig) -> Result<i32, i32> {
     // let sock = UdpSocket::bind("localhost:0").unwrap();
     // let packet = Packet {
     //     ptyp: PacketType::Data,

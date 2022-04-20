@@ -42,20 +42,30 @@ mod misc {
 
     /// An [Reader](Read) extension that allows you to quickly chug UTF-8 readers
     pub trait Chug: Read + Sized {
-        fn chug(self) -> io::Result<String>;
+        fn borrow_chug(&mut self) -> io::Result<String>;
+        fn chug(mut self) -> io::Result<String> {
+            self.borrow_chug()
+        }
         fn must_chug(self) -> String {
             self.chug().unwrap()
         }
     }
 
     impl<R: Read + Sized> Chug for R {
-        fn chug(mut self) -> io::Result<String> {
+        fn borrow_chug(&mut self) -> io::Result<String> {
             let mut buf = Vec::with_capacity(1024);
             self.read_to_end(&mut buf)?;
             std::str::from_utf8(&buf)
                 .map(ToOwned::to_owned)
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
         }
+        // fn chug(mut self) -> io::Result<String> {
+        //     let mut buf = Vec::with_capacity(1024);
+        //     self.read_to_end(&mut buf)?;
+        //     std::str::from_utf8(&buf)
+        //         .map(ToOwned::to_owned)
+        //         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        // }
     }
 
     pub fn random_udp_socket_addr() -> String {
