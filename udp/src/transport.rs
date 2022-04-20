@@ -145,7 +145,8 @@ impl UdpxListener {
         )?;
 
         // This packet should be an ACK or DATA packet
-        sock.connect(remote)?;
+        // sock.connect(remote)?;
+        sock.connect(addr)?;
         let nseq = packet.nseq + 3;
         match ack_or_data.ptyp {
             PacketType::Data => Ok((ack_or_data, nseq, sock)),
@@ -386,7 +387,8 @@ impl UdpxStream {
 
         log::debug!("Setting socket remote peer to {}", remote);
         self.remote = try_to_ipv4(remote)?;
-        self.sock.connect(remote)?;
+        self.sock
+            .connect(self.proxy.map(Into::into).unwrap_or(remote))?;
 
         // Send the ACK packet. We will just send this packet without waiting
         // for a response
