@@ -11,12 +11,12 @@ use crate::util::{millis, random_udp_socket_addr, TruncateLeft};
 use crate::{Bindable, Connectable, Listener, Stream, StreamIterator};
 
 use std::borrow::Borrow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::io::{self, Error, ErrorKind, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::packet::PacketBuffer;
 
@@ -41,6 +41,9 @@ pub struct UdpxListener {
 
     /// The router proxy to use
     proxy: Option<SocketAddrV4>,
+
+    /// A set of SYN packet's so that we can avoid duplicates
+    duplicate_syns: HashMap<Packet, Instant>,
 }
 
 impl Bindable<UdpxStream> for UdpxListener {
@@ -60,6 +63,7 @@ impl UdpxListener {
             timeout: DEFAULT_TIMEOUT,
             nonblocking: false,
             proxy,
+            duplicate_syns: HashMap::with_capacity(32),
         })
     }
 
@@ -193,6 +197,19 @@ impl Listener<UdpxStream> for UdpxListener {
         // Do a handshake
         let (n, addr) = self.sock.recv_from(&mut self.buf)?;
         let packet = Packet::try_from(&self.buf[..n])?;
+
+        let timelimit_to_accept_another_syn = Duration::from_secs(2);
+        if let Some(when) = self.duplicate_syns.get(&packet) {
+            let how_long_has_it_been = Instant::now() - *when;
+            if how_long_has_it_been < timelimit_to_accept_another_syn {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("duplicate SYN packet received: {}", packet),
+                ));
+            }
+        }
+        self.duplicate_syns.insert(packet.clone(), Instant::now());
+
         let (packet, nseq, sock, remote) = match self.handshake(addr, &packet) {
             Ok(values) => values,
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
@@ -651,8 +668,8 @@ impl Read for UdpxStream {
         let _debug_remote = format!("{}", self.remote);
 
         let mut red = 0;
-        let mut skipped = MAX_SKIPPED;
-        // let mut skipped = 1 << 14;
+        // let mut skipped = MAX_SKIPPED;
+        let mut skipped = 1 << 14;
         while red < buf.len() && skipped > 0 {
             if let Some(value) = self.maybe_registered_err(red) {
                 return value;
