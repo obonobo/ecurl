@@ -25,7 +25,7 @@ impl Templater for TcpStream {
 
 impl Templater for UdpxStream {
     fn template(&self, files: impl IntoIterator<Item = String>) -> String {
-        files.into_iter().join("\n")
+        files.into_iter().join("\n") + "\n"
     }
 }
 
