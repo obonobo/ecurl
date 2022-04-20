@@ -84,6 +84,7 @@ impl UdpxListener {
         let remote = deserialize_addr(packet.data.as_ref());
 
         log::debug!("Beginning handshake with {}", remote);
+        log::debug!("{}", packet);
         if packet.ptyp != PacketType::Syn {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -459,7 +460,7 @@ impl UdpxStream {
         };
 
         self.sock
-            .set_write_timeout(millis(1000))
+            .set_write_timeout(millis(TIMEOUT))
             .expect("Failed to set write timeout");
 
         let n = ack.write_to(&mut self.buf[..])?;
@@ -529,13 +530,16 @@ impl UdpxStream {
 
     /// Acknowledge that a FIN packet has been received
     fn fin_ack(&mut self) -> io::Result<()> {
-        let fin_ack = Packet {
-            ptyp: PacketType::FinAck,
-            ..self.packet_defaults()
-        };
-        self.sock.set_write_timeout(millis(250))?;
-        let n = fin_ack.write_to(&mut self.buf[..])?;
-        let _ = self.sock.send(&self.buf[..n]); // ignore
+        // Send fin_ack many times
+        self.sock.set_write_timeout(millis(5))?;
+        for _ in 0..100 {
+            let fin_ack = Packet {
+                ptyp: PacketType::FinAck,
+                ..self.packet_defaults()
+            };
+            let n = fin_ack.write_to(&mut self.buf[..])?;
+            let _ = self.sock.send(&self.buf[..n]); // ignore
+        }
         Ok(())
     }
 }
@@ -589,7 +593,7 @@ impl Stream for UdpxStream {
 
         // 10 tries to receive a FIN-ACK
         for _ in 0..30 {
-            self.sock.set_write_timeout(millis(1000))?;
+            self.sock.set_write_timeout(millis(TIMEOUT))?;
             log::debug!("Sending FIN packet");
             match self.sock.send(fin) {
                 Ok(_) => {
@@ -606,7 +610,7 @@ impl Stream for UdpxStream {
 
             // Await FIN-ACK
             log::debug!("Awaiting FIN-ACK");
-            self.sock.set_read_timeout(millis(1000))?;
+            self.sock.set_read_timeout(millis(TIMEOUT))?;
             match self.sock.recv(&mut self.buf[..]) {
                 Ok(n) => {
                     let packet = Packet::try_from(&self.buf[..n])?;
@@ -639,6 +643,7 @@ impl Stream for UdpxStream {
 
 /// Max number of WouldBlock skips for Read/Write
 pub const MAX_SKIPPED: usize = 5;
+pub const TIMEOUT: u64 = 100;
 
 impl Read for UdpxStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -646,8 +651,8 @@ impl Read for UdpxStream {
         let _debug_remote = format!("{}", self.remote);
 
         let mut red = 0;
-        // let mut skipped = MAX_SKIPPED;
-        let mut skipped = 1 << 14;
+        let mut skipped = MAX_SKIPPED;
+        // let mut skipped = 1 << 14;
         while red < buf.len() && skipped > 0 {
             if let Some(value) = self.maybe_registered_err(red) {
                 return value;
@@ -655,7 +660,7 @@ impl Read for UdpxStream {
 
             // TODO: for now we will wait forever
             // We will only try reading for a short period of time
-            self.sock.set_read_timeout(millis(1000))?;
+            self.sock.set_read_timeout(millis(TIMEOUT))?;
             // self.sock.set_read_timeout(None).unwrap();
 
             // Grab a packet from either the received packets buffer, or a fresh
@@ -790,7 +795,7 @@ impl Write for UdpxStream {
                     transfer.packet
                 );
 
-                self.sock.set_write_timeout(millis(1000)).unwrap();
+                self.sock.set_write_timeout(millis(TIMEOUT)).unwrap();
                 let n = transfer.packet.write_to(&mut self.buf[..]).unwrap();
                 match self.sock.send(&self.buf[..n]) {
                     Ok(_) => {}
@@ -809,7 +814,7 @@ impl Write for UdpxStream {
                             log::error!("Skipping this error, let's try a read...");
                         }
                         skipped -= 1;
-                        self.sock.set_read_timeout(millis(1000))?;
+                        self.sock.set_read_timeout(millis(TIMEOUT))?;
                         let packet = match self.sock.recv(&mut self.buf) {
                             Ok(n) => Packet::try_from(&self.buf[..n]).wrap_malpac()?,
                             Err(e) => {
@@ -854,7 +859,7 @@ impl Write for UdpxStream {
                 self.packets_sent.keys().join(", ")
             );
 
-            self.sock.set_read_timeout(millis(1000))?;
+            self.sock.set_read_timeout(millis(TIMEOUT))?;
             let mut i = self.packets_sent.len();
             while i > 0 {
                 i -= 1;
@@ -873,7 +878,7 @@ impl Write for UdpxStream {
                         } else {
                             log::error!("Skipping this error...");
                         }
-                        thread::sleep(millis(1).unwrap());
+                        thread::sleep(millis(TIMEOUT).unwrap());
                         continue;
                     }
                     Err(e) => {
@@ -1033,7 +1038,7 @@ pub fn reliable_send(
     skip_would_block: bool,
     proxy: Option<SocketAddrV4>,
 ) -> io::Result<(Packet, SocketAddr)> {
-    let timeout = Duration::from_millis(1000);
+    let timeout = Duration::from_millis(TIMEOUT);
 
     let send_to_addr = proxy.map(Into::into).unwrap_or(peer);
     let mut recv = packet_buffer();
