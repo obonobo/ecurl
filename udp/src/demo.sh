@@ -1,3 +1,15 @@
+# Router no drop
+./router.go --drop-rate 0.5 --max-delay 5ms
+
+
+# Router drop
+./router.go --drop-rate 0.02 --max-delay 1ms
+
+
+# Router big drop
+./router.go --drop-rate 0.5 --max-delay 5ms
+
+
 
 # GET MAKEFILE:
 make; make copy; ./client --verbose --proxy 127.0.0.1:3000 --get 127.0.0.1:8080/Makefile
