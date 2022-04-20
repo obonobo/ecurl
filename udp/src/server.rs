@@ -237,7 +237,7 @@ impl ServerRunner {
                         }
                     };
                     log::debug!("Server: shutting down stream ({})", stream);
-                    thread::sleep(Duration::from_millis(1000));
+                    // thread::sleep(Duration::from_millis(50));
                     match stream.shutdown() {
                         Ok(_) => log::debug!("Shutdown successful"),
                         Err(e) => log::error!("Shutdown failed: {}", e),
@@ -428,9 +428,12 @@ fn accept_file_upload(filename: &str, body: &mut dyn Read) -> Result<(), ServerE
         return Err(ServerError::writing_to_symlink());
     }
 
+    // const TRUNCATE_ENABLED: bool = false;
+    const TRUNCATE_ENABLED: bool = true;
     let mut fh = OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(TRUNCATE_ENABLED)
         .open(filename)
         .map_err(wrap)?;
 

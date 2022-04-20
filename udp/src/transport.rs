@@ -202,6 +202,7 @@ impl Listener<UdpxStream> for UdpxListener {
 
         let timelimit_to_accept_another_syn = Duration::from_secs(2);
         if let Some(when) = self.duplicate_syns.get(&packet) {
+            log::debug!("Received a duplicate SYN packet ({}), dropping...", packet);
             return self.accept();
 
             // return Err(io::Error::new(
