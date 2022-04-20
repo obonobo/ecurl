@@ -1,5 +1,5 @@
 use std::{
-    fmt::Display,
+    fmt::{Debug, Display},
     fs,
     io::{Error, Write},
     net::{IpAddr, TcpListener, TcpStream},
@@ -194,14 +194,20 @@ pub mod assertions {
 }
 
 /// A wrapper that let's you print [Results](Result)
-pub struct DisplayResult<T, E>(pub Result<T, E>);
+pub struct DebugResult<T: Debug, E: Debug>(pub Result<T, E>);
 
-impl<T: Display, E: Display> Display for DisplayResult<T, E> {
+impl<T: Debug, E: Debug> Debug for DebugResult<T, E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
-            Ok(value) => write!(f, "Ok({})", value),
-            Err(value) => write!(f, "Err({})", value),
+            Ok(value) => write!(f, "Ok({:?})", value),
+            Err(value) => write!(f, "Err({:?})", value),
         }
+    }
+}
+
+impl<T: Debug, E: Debug> Display for DebugResult<T, E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
     }
 }
 

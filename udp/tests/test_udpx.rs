@@ -10,7 +10,10 @@ fn test_handshake() {
     init_logging(true);
     let handle = ServerDropper::udpxserver();
     let addr = handle.addr();
-    UdpxStream::connect(addr).unwrap();
+    UdpxStream::connect(addr)
+        .unwrap()
+        .shutdown()
+        .unwrap_or_default();
 }
 
 /// Tests the UPDx handshake without trying to read data from the socket (like
@@ -44,24 +47,25 @@ fn test_concurrent_handshakes() {
     init_logging(true);
     let handle = ServerDropper::udpxserver();
     let addr = handle.addr();
-    let (resin, resout) = mpsc::channel();
+    let (send, recv) = mpsc::channel();
 
     // Spawn threads
     let n = 25;
     for _ in 0..n {
-        let (resin, addr) = (resin.clone(), addr.clone());
+        let (sendc, addr) = (send.clone(), addr.clone());
         thread::spawn(move || {
-            resin.send(UdpxStream::connect(addr)).unwrap();
+            let res = UdpxStream::connect(addr).and_then(|mut s| s.shutdown());
+            sendc.send(res).unwrap();
         });
     }
-    drop(resin);
+    drop(send);
 
     // Assert results
-    for res in resout {
+    for res in recv {
         assert!(
             res.is_ok(),
             "Expected no connection errors, but got: {}",
-            DisplayResult(res)
+            DebugResult(res)
         );
     }
 }
