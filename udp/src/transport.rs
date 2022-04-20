@@ -604,8 +604,8 @@ impl Read for UdpxStream {
 
             // TODO: for now we will wait forever
             // We will only try reading for a short period of time
-            // self.sock.set_read_timeout(millis(50))?;
-            self.sock.set_read_timeout(None).unwrap();
+            self.sock.set_read_timeout(millis(1000))?;
+            // self.sock.set_read_timeout(None).unwrap();
 
             // Grab a packet from either the received packets buffer, or a fresh
             // packet from the socket.
@@ -721,7 +721,7 @@ impl Write for UdpxStream {
 
         // TODO: for now we will put the ACK-loop right in here. In the future,
         // we may move the loop somewhere else, perhaps into the `flush` method?
-        let mut skipped = MAX_SKIPPED;
+        let mut skipped = 1 << 14;
         let mut n = 0;
         while !self.packets_sent.is_empty() && skipped > 0 {
             // self.registered_err()?;
@@ -737,7 +737,7 @@ impl Write for UdpxStream {
                     transfer.packet
                 );
 
-                self.sock.set_write_timeout(millis(30)).unwrap();
+                self.sock.set_write_timeout(millis(1000)).unwrap();
                 let n = transfer.packet.write_to(&mut self.buf[..]).unwrap();
                 match self.sock.send(&self.buf[..n]) {
                     Ok(_) => {}
@@ -745,11 +745,50 @@ impl Write for UdpxStream {
                     Err(e) if e.kind() == ErrorKind::Interrupted => continue,
                     Err(e) if e.kind() == ErrorKind::WouldBlock => {
                         log::error!("UdpxStream::write(): {}", e);
+                        log::error!("Hmmm... Maybe they are trying to me something");
+
+                        // self.sock.set_read_timeout(millis(250))?;
+                        // let packet = match self.sock.recv(&mut self.buf)?;
+
+                        // break;
+
                         if skipped > 1 {
-                            log::error!("Skipping this error...");
+                            log::error!("Skipping this error, let's try a read...");
                         }
                         skipped -= 1;
-                        continue;
+                        self.sock.set_read_timeout(millis(1000))?;
+                        let packet = match self.sock.recv(&mut self.buf) {
+                            Ok(n) => Packet::try_from(&self.buf[..n]).wrap_malpac()?,
+                            Err(e) => {
+                                log::error!("{}", e);
+                                log::error!("Nope, reading didn't work either...");
+                                continue;
+                            }
+                        };
+
+                        match packet.ptyp {
+                            PacketType::Data => {
+                                log::debug!(
+                                    "{}",
+                                    "Got a DATA packet in UdpxStream::write(), ".to_owned()
+                                        + "placing it in read-packets queue"
+                                );
+                                self.packets_received.insert(packet.nseq, packet.into());
+                                continue;
+                            }
+
+                            PacketType::SynAck => {
+                                log::error!("Got a SYN-ACK, server must have lost our handshake ACK, resending now");
+                                if let Some(ack) = self.handshake_ack.borrow() {
+                                    log::debug!("Resending handshake ACK: {}", ack);
+                                    let mut buf = packet_buffer();
+                                    let n = ack.write_to(&mut buf[..]).unwrap();
+                                    self.sock.send(&buf[..n])?;
+                                }
+                            }
+
+                            _ => continue,
+                        }
                     }
                     Err(e) => return Err(self.register_err(e)),
                 };
@@ -762,8 +801,12 @@ impl Write for UdpxStream {
                 self.packets_sent.keys().join(", ")
             );
 
-            self.sock.set_read_timeout(millis(30))?;
-            for i in 0..self.packets_sent.len() {
+            self.sock.set_read_timeout(millis(1000))?;
+            let mut i = self.packets_sent.len();
+            while i > 0 {
+                i -= 1;
+
+                // for i in 0..self.packets_sent.len() {
                 log::debug!("Waiting for ACK - {}", i);
                 let packet = match self.sock.recv(&mut self.buf) {
                     Ok(n) => Packet::try_from(&self.buf[..n]).wrap_malpac()?,
@@ -777,6 +820,8 @@ impl Write for UdpxStream {
                         } else {
                             log::error!("Skipping this error...");
                         }
+                        thread::sleep(millis(1).unwrap());
+                        i += 1;
                         continue;
                     }
                     Err(e) => {
@@ -817,11 +862,16 @@ impl Write for UdpxStream {
 
                     // Then the server failed to receive our handshake ACK, resend it
                     PacketType::SynAck => {
+                        log::error!(
+                            "Got a SYN-ACK, server must have lost our handshake ACK, resending now"
+                        );
                         if let Some(ack) = self.handshake_ack.borrow() {
+                            log::debug!("Resending handshake ACK: {}", ack);
                             let mut buf = packet_buffer();
                             let n = ack.write_to(&mut buf[..]).unwrap();
                             self.sock.send(&buf[..n])?;
                         }
+                        i += 1;
                     }
 
                     // Drop packet otherwise; at this point in the conversation
@@ -931,6 +981,8 @@ pub fn reliable_send(
     skip_would_block: bool,
     proxy: Option<SocketAddrV4>,
 ) -> io::Result<(Packet, SocketAddr)> {
+    let timeout = Duration::from_millis(1000);
+
     let send_to_addr = proxy.map(Into::into).unwrap_or(peer);
     let mut recv = packet_buffer();
     let join = |packet_types: &[PacketType]| packet_types.iter().join(" or ");
@@ -940,7 +992,7 @@ pub fn reliable_send(
     let mut attempts = 1;
     let mut i = 0;
 
-    let mut block_limit = 15;
+    let mut block_limit = RELIABLE_SEND_MAX_ATTEMPTS;
     if skip_would_block {
         block_limit = RELIABLE_SEND_MAX_ATTEMPTS
     }
@@ -965,6 +1017,7 @@ pub fn reliable_send(
 
         // sock.send_to(send, peer)?; // Resend the packet
         sock.send_to(send, send_to_addr)?; // Resend the packet
+        log::debug!("{} packet sent", send_packet_type);
 
         sock.set_read_timeout(Some(timeout))?;
         let (packet, remote) = match sock.recv_from(&mut recv) {
@@ -977,7 +1030,7 @@ pub fn reliable_send(
                     return Err(e);
                 }
                 block_limit -= 1;
-                thread::sleep(Duration::from_millis(1));
+                thread::sleep(Duration::from_millis(10));
                 i -= 1;
                 continue;
             }

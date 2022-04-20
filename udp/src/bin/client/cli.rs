@@ -29,6 +29,8 @@ fn client_main(_: ClientConfig) -> Result<i32, i32> {
     )
     .unwrap();
 
+    conn.write_all(b"Hello world!").unwrap();
+
     // let mut conn = UdpxStream::connect("localhost:8080").unwrap();
     // conn.write_all("Hello world!".as_bytes()).unwrap();
     // conn.shutdown().unwrap();

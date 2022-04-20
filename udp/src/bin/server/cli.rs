@@ -38,8 +38,14 @@ fn server_main(_: ServerConfig) -> Result<i32, i32> {
         };
         let peer_addr = stream.peer_addr().unwrap();
         log::info!("SERVER: Made a connection with {}", peer_addr);
-        // let red = stream.must_chug();
-        // log::info!("SERVER: {}", red)
+        let red = match stream.chug() {
+            Ok(msg) => msg,
+            Err(e) => {
+                log::error!("{}", e);
+                continue;
+            }
+        };
+        log::info!("SERVER: {}", red)
     }
     Ok(EXIT_OKAY)
 }
