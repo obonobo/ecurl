@@ -80,7 +80,7 @@ impl UdpxListener {
         &mut self,
         addr: SocketAddr,
         packet: &Packet,
-    ) -> io::Result<(Packet, u32, UdpSocket)> {
+    ) -> io::Result<(Packet, u32, UdpSocket, SocketAddr)> {
         let remote = deserialize_addr(packet.data.as_ref());
 
         log::debug!("Beginning handshake with {}", remote);
@@ -146,10 +146,11 @@ impl UdpxListener {
 
         // This packet should be an ACK or DATA packet
         // sock.connect(remote)?;
+        let _debug = addr.to_string();
         sock.connect(addr)?;
         let nseq = packet.nseq + 3;
         match ack_or_data.ptyp {
-            PacketType::Data => Ok((ack_or_data, nseq, sock)),
+            PacketType::Data => Ok((ack_or_data, nseq, sock, remote)),
             PacketType::Ack => {
                 // If it's an ACK, check the seq number, otherwise return
                 if ack_or_data.nseq != packet.nseq + 2 {
@@ -161,7 +162,7 @@ impl UdpxListener {
                         packet.nseq + 2),
                     ))
                 } else {
-                    Ok((ack_or_data, nseq, sock))
+                    Ok((ack_or_data, nseq, sock, remote))
                 }
             }
             _ => Err(Error::new(
@@ -191,7 +192,7 @@ impl Listener<UdpxStream> for UdpxListener {
         // Do a handshake
         let (n, addr) = self.sock.recv_from(&mut self.buf)?;
         let packet = Packet::try_from(&self.buf[..n])?;
-        let (packet, nseq, sock) = match self.handshake(addr, &packet) {
+        let (packet, nseq, sock, remote) = match self.handshake(addr, &packet) {
             Ok(values) => values,
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
                 log::error!("Client unexpectedly closed connection in the middle of our handshake");
@@ -199,7 +200,16 @@ impl Listener<UdpxStream> for UdpxListener {
             }
             Err(e) => return Err(e),
         };
-        let stream = UdpxStream::new(sock, nseq, self.proxy).with_starting_data([packet]);
+
+        let stream = UdpxStream::new(sock, nseq, self.proxy, {
+            if let SocketAddr::V4(addr) = remote {
+                Some(addr)
+            } else {
+                None
+            }
+        })
+        .with_starting_data([packet]);
+
         log::debug!("handshake completed with addr {}", addr);
         Ok((stream, addr))
     }
@@ -267,7 +277,7 @@ pub struct UdpxStream {
 
 impl Drop for UdpxStream {
     fn drop(&mut self) {
-        let _ = self.shutdown();
+        // let _ = self.shutdown();
     }
 }
 
@@ -289,7 +299,7 @@ impl UdpxStream {
         addr: impl ToSocketAddrs,
         proxy: Option<SocketAddrV4>,
     ) -> io::Result<Self> {
-        Self::new(Self::random_socket()?, Self::FIRST_NSEQ, proxy).handshake(addr)
+        Self::new(Self::random_socket()?, Self::FIRST_NSEQ, proxy, None).handshake(addr)
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -300,22 +310,28 @@ impl UdpxStream {
         Stream::shutdown(self, std::net::Shutdown::Both)
     }
 
-    fn new(sock: UdpSocket, nseq: u32, proxy: Option<SocketAddrV4>) -> Self {
-        let remote = sock
-            .peer_addr()
-            .and_then(|ip| match ip {
-                SocketAddr::V4(addr) => Ok(addr),
-                SocketAddr::V6(addr) => {
-                    let err = io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("not an ipv4 address ({})", addr),
-                    );
-                    log::error!("Bad remote addr: {}", err);
-                    log::error!("Using default addr as remote...");
-                    Err(err)
-                }
-            })
-            .unwrap_or_else(|_| SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0));
+    fn new(
+        sock: UdpSocket,
+        nseq: u32,
+        proxy: Option<SocketAddrV4>,
+        remote: Option<SocketAddrV4>,
+    ) -> Self {
+        let remote = remote.unwrap_or_else(|| {
+            sock.peer_addr()
+                .and_then(|ip| match ip {
+                    SocketAddr::V4(addr) => Ok(addr),
+                    SocketAddr::V6(addr) => {
+                        let err = io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("not an ipv4 address ({})", addr),
+                        );
+                        log::error!("Bad remote addr: {}", err);
+                        log::error!("Using default addr as remote...");
+                        Err(err)
+                    }
+                })
+                .unwrap_or_else(|_| SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 0))
+        });
 
         Self {
             sock,
@@ -443,7 +459,7 @@ impl UdpxStream {
         };
 
         self.sock
-            .set_write_timeout(millis(30))
+            .set_write_timeout(millis(1000))
             .expect("Failed to set write timeout");
 
         let n = ack.write_to(&mut self.buf[..])?;
@@ -549,6 +565,10 @@ impl Stream for UdpxStream {
 
     /// Sends a FIN packet and registers a `StreamClosed` error
     fn shutdown(&mut self, _: std::net::Shutdown) -> io::Result<()> {
+        let _debug_peer = format!("{}", self.sock.peer_addr().unwrap());
+        let _debug_remote = format!("{}", self.remote);
+
+        log::debug!("Shutting down UpdxStream...");
         let fin = Packet {
             ptyp: PacketType::Fin,
             nseq: {
@@ -568,23 +588,48 @@ impl Stream for UdpxStream {
         let fin = &fin_buf[..n];
 
         // 10 tries to receive a FIN-ACK
-        for _ in 0..10 {
-            self.sock.set_write_timeout(millis(100))?;
+        for _ in 0..30 {
+            self.sock.set_write_timeout(millis(1000))?;
+            log::debug!("Sending FIN packet");
             match self.sock.send(fin) {
-                Ok(_) => {}
-                Err(e) if e.kind() == io::ErrorKind::TimedOut => continue,
-                _ => break,
+                Ok(_) => {
+                    log::debug!("Ok");
+                }
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+                    log::error!("Got an error sending FIN: {}", e);
+                    continue;
+                }
+                Err(e) => {
+                    log::error!("Got an error sending FIN: {}", e);
+                }
             }
 
             // Await FIN-ACK
-            self.sock.set_read_timeout(millis(30))?;
+            log::debug!("Awaiting FIN-ACK");
+            self.sock.set_read_timeout(millis(1000))?;
             match self.sock.recv(&mut self.buf[..]) {
-                Ok(n) => match Packet::try_from(&self.buf[..n])?.ptyp {
-                    PacketType::FinAck | PacketType::Fin => break,
-                    _ => continue,
-                },
-                Err(e) if e.kind() == io::ErrorKind::TimedOut => continue,
-                _ => break, // For now, let's say that recv errors mean we can close
+                Ok(n) => {
+                    let packet = Packet::try_from(&self.buf[..n])?;
+                    match packet.ptyp {
+                        PacketType::FinAck | PacketType::Fin => {
+                            log::debug!("FIN-ACK received");
+                            break;
+                        }
+                        _ => {
+                            log::error!("Wrong packet type, got {}, expected FIN-ACK", packet);
+                            continue;
+                        }
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+                    log::error!("Got an error awaiting FIN-ACK: {}", e);
+                    continue;
+                }
+                Err(e) => {
+                    log::error!("Got an error awaiting FIN-ACK: {}", e);
+                    // break;
+                    continue;
+                } // For now, let's say that recv errors mean we can close
             };
         }
         self.closed = true;
@@ -597,8 +642,12 @@ pub const MAX_SKIPPED: usize = 5;
 
 impl Read for UdpxStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let _debug_peer = format!("{}", self.sock.peer_addr().unwrap());
+        let _debug_remote = format!("{}", self.remote);
+
         let mut red = 0;
-        let mut skipped = MAX_SKIPPED;
+        // let mut skipped = MAX_SKIPPED;
+        let mut skipped = 1 << 14;
         while red < buf.len() && skipped > 0 {
             if let Some(value) = self.maybe_registered_err(red) {
                 return value;
@@ -706,6 +755,8 @@ impl Read for UdpxStream {
 
 impl Write for UdpxStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let _debug_peer = format!("{}", self.sock.peer_addr().unwrap());
+        let _debug_remote = format!("{}", self.remote);
         self.registered_err()?;
 
         // Queue up the packets to be written
@@ -823,7 +874,6 @@ impl Write for UdpxStream {
                             log::error!("Skipping this error...");
                         }
                         thread::sleep(millis(1).unwrap());
-                        i += 1;
                         continue;
                     }
                     Err(e) => {
