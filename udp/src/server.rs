@@ -205,7 +205,7 @@ impl ServerRunner {
                 let stream = match stream {
                     Ok(stream) => stream,
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        log::debug!("Accept would block...");
+                        // log::debug!("Accept would block...");
 
                         // Poll the handle exit flag
                         if handlec.exit.load(Ordering::SeqCst) {

@@ -1,14 +1,13 @@
-# Router no drop
+# Router no drop:
 ./router.go --drop-rate 0.5 --max-delay 5ms
 
 
-# Router drop
+# Router drop:
 ./router.go --drop-rate 0.02 --max-delay 1ms
 
 
-# Router big drop
+# Router big drop:
 ./router.go --drop-rate 0.5 --max-delay 5ms
-
 
 
 # GET MAKEFILE:

@@ -194,7 +194,7 @@ impl Listener<UdpxStream> for UdpxListener {
 
     /// Returns a new UDPX stream as well as the address of the remote peer
     fn accept(&mut self) -> io::Result<(UdpxStream, SocketAddr)> {
-        log::debug!("Listener.accept() was called");
+        // log::debug!("Listener.accept() was called");
 
         // Do a handshake
         let (n, addr) = self.sock.recv_from(&mut self.buf)?;
