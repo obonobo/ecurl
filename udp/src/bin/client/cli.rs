@@ -1,10 +1,9 @@
 use std::borrow::Borrow;
 use std::fs;
 use std::io::Write;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::SocketAddrV4;
 use std::str::FromStr;
 
-use udpx::packet::{Packet, PacketType};
 use udpx::transport::UdpxStream;
 use udpx::util::constants::EXIT_NOT_OKAY;
 use udpx::util::Chug;
@@ -15,7 +14,6 @@ udpx::cli_binary!(ClientConfig, client_main);
 fn client_main(cfg: ClientConfig) -> Result<i32, i32> {
     let (addr, file) = parse_args(&cfg.args)?;
     log::info!("Sending request to: {}{}", addr, file);
-
     if cfg.get {
         let got = get(&cfg, addr, file).map_err(|_| EXIT_NOT_OKAY)?;
         print!("{}", got);
@@ -25,18 +23,13 @@ fn client_main(cfg: ClientConfig) -> Result<i32, i32> {
     } else {
         println!("Please specify either `--get` or `--post`")
     }
-
     Ok(EXIT_OKAY)
 }
 
 fn get(cfg: &ClientConfig, addr: SocketAddrV4, file: String) -> std::io::Result<String> {
-    // let remote = SocketAddrV4::from_str("127.0.0.1:8080").unwrap();
     let remote = addr;
     let mut conn = UdpxStream::connect_with_proxy(remote, cfg.proxy)?;
-
     conn.write_all(format!("GET {} HTTP/1.1\r\n\r\n", file).as_bytes())?;
-    // conn.write_all(b"GET /Makefile HTTP/1.1\r\n\r\n")?;
-
     let got = conn.borrow_chug()?;
     conn.shutdown()?;
     Ok(got)
@@ -54,17 +47,19 @@ fn post(cfg: &ClientConfig, addr: SocketAddrV4, file: String) -> std::io::Result
         )
         .as_bytes(),
     )?;
-
     let posted = conn.borrow_chug()?;
     conn.shutdown()?;
-
     Ok(posted)
 }
 
 fn read_file(cfg: &ClientConfig) -> std::io::Result<String> {
     if let Some(data) = cfg.inline_data.borrow() {
         if cfg.file.is_some() {
-            eprintln!("WARNING: cannot specify both --file and --inline-data, skipping --file and using --inline-data");
+            eprintln!(
+                "{}",
+                String::from("WARNING: cannot specify both --file")
+                    + " and --inline-data, skipping --file and using --inline-data"
+            );
         }
         Ok(data.to_owned())
     } else if let Some(file) = cfg.file.borrow() {

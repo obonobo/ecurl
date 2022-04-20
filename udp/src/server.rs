@@ -17,16 +17,11 @@ use threadpool::ThreadPool;
 use crate::{
     bullshit_scanner::BullshitScanner,
     errors::ServerError,
-    // html::template,
     html::Templater,
     parse::{parse_http_request, Method, Request},
     trait_alias,
     transport::UdpxListener,
-    util::Chug,
-    Bindable,
-    Incoming,
-    Listener,
-    Stream,
+    Bindable, Incoming, Listener, Stream,
 };
 
 trait_alias! {

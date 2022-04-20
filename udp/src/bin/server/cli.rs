@@ -1,20 +1,14 @@
-use std::{
-    net::{SocketAddr, SocketAddrV4, UdpSocket},
-    str::FromStr,
-    time::Instant,
-};
+use std::{net::SocketAddrV4, str::FromStr, time::Instant};
 
 use udpx::{
-    packet::Packet,
     server::{Handle, Server},
-    transport::{UdpxListener, UdpxStream},
+    transport::UdpxListener,
     util::{
         config::err_to_exit_code,
         constants::{EXIT_NOT_OKAY, EXIT_OKAY},
-        logging::init_logging,
         Chug,
     },
-    Bindable, Incoming, Stream,
+    Incoming, Stream,
 };
 
 udpx::cli_binary!(ServerConfig, server_main);
@@ -49,7 +43,6 @@ fn server_main(cfg: ServerConfig) -> Result<i32, i32> {
     let proxy = cfg.proxy;
     let srv = server(cfg);
 
-    // match srv.serve() {
     match srv.serve_udpx_with_proxy(proxy) {
         Ok(handle) => {
             log::debug!("Got a server handle: {:?}", handle);

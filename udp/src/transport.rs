@@ -449,7 +449,6 @@ impl UdpxStream {
 
     fn write_packet(&mut self, packet: &Packet) -> io::Result<()> {
         let n = packet.write_to(&mut self.buf[..])?;
-        // self.sock.send(&self.buf[..n])?;
         self.sock.send_to(
             &self.buf[..n],
             self.proxy.map(Into::into).unwrap_or(self.remote),
