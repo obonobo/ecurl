@@ -495,7 +495,11 @@ impl UdpxStream {
                 "Received and ACKed packet {}, placing it in receive buffer now",
                 t.packet.nseq
             );
-            self.packets_received.insert(t.packet.nseq, t);
+            // self.packets_received.insert(t.packet.nseq, t);
+
+            if self.packets_received.get(&t.packet.nseq).is_none() {
+                self.packets_received.insert(t.packet.nseq, t);
+            }
         })
     }
 
@@ -567,6 +571,30 @@ impl UdpxStream {
         }
         Ok(())
     }
+
+    fn do_read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.sock.set_read_timeout(None)?;
+
+        let mut red = 0;
+
+        let mut read_buf = packet_buffer();
+        let n = self.sock.recv(&mut read_buf[..])?;
+        let packet = Packet::try_from(&read_buf[..n]).expect("Malformed packet");
+        log::debug!("Read packet: {}", packet);
+        match packet.ptyp {
+            PacketType::Data => {
+                log::debug!("Got a DATA packet");
+            }
+            PacketType::Fin => todo!(),
+            _ => panic!("Invalid packet {}", packet),
+        }
+
+        todo!()
+    }
+
+    fn do_write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        todo!()
+    }
 }
 
 fn deserialize_addr(buf: &[u8]) -> SocketAddr {
@@ -628,6 +656,7 @@ impl Stream for UdpxStream {
         for _ in 0..30 {
             self.sock.set_write_timeout(millis(TIMEOUT))?;
             log::debug!("Sending FIN packet");
+
             match self.sock.send(fin) {
                 Ok(_) => {
                     log::debug!("Ok");
@@ -680,6 +709,10 @@ pub const TIMEOUT: u64 = 100;
 
 impl Read for UdpxStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // // TODO: DEBUG
+        // return self.do_read(buf);
+        // // TODO: DEBUG
+
         let _debug_peer = format!("{}", self.sock.peer_addr().unwrap());
         let _debug_remote = format!("{}", self.remote);
 
@@ -708,10 +741,10 @@ impl Read for UdpxStream {
                         Err(e) if e.kind() == ErrorKind::WouldBlock => {
                             log::error!("UdpxStream::read(): {}", e);
 
-                            if red > 0 {
-                                log::error!("UdpxStream::read(): we've already read some data, returning that now");
-                                return Ok(red);
-                            }
+                            // if red > 0 {
+                            //     log::error!("UdpxStream::read(): we've already read some data, returning that now");
+                            //     return Ok(red);
+                            // }
 
                             if skipped > 1 {
                                 log::error!("Skipping this error...");
@@ -799,6 +832,10 @@ impl Read for UdpxStream {
 
 impl Write for UdpxStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // // TODO: DEBUG
+        // return self.do_write(buf);
+        // // TODO: DEBUG
+
         let _debug_peer = format!("{}", self.sock.peer_addr().unwrap());
         let _debug_remote = format!("{}", self.remote);
         self.registered_err()?;
@@ -952,7 +989,8 @@ impl Write for UdpxStream {
                             "Got a DATA packet in UdpxStream::write(), ".to_owned()
                                 + "placing it in read-packets queue"
                         );
-                        self.packets_received.insert(packet.nseq, packet.into());
+                        self.buffer_and_ack(packet.into())?;
+                        // self.packets_received.insert(packet.nseq, packet.into());
                         continue;
                     }
 
