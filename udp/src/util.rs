@@ -162,6 +162,20 @@ pub mod config {
                 /// Proxy configuration (for use with router.go)
                 #[clap(long)]
                 pub proxy: Option<std::net::SocketAddrV4>,
+
+                #[clap(short, long)]
+                pub file: Option<String>,
+
+                #[clap(short, long)]
+                pub inline_data: Option<String>,
+
+                #[clap(long)]
+                pub get: bool,
+
+                #[clap(long)]
+                pub post: bool,
+
+                pub args: Vec<String>,
             }
 
             impl $name {
@@ -185,12 +199,17 @@ pub mod config {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                     write!(
                         f,
-                        "{}: verbose={}, dir={}, port={}, proxy={:?}",
+                        "{}: verbose={}, dir={}, port={}, proxy={:?}{}",
                         std::any::type_name::<Self>(),
                         self.verbose,
                         self.dir,
                         self.port,
                         self.proxy,
+                        if self.args.len() > 0 {
+                            format!(", files={:?}", self.args)
+                        } else {
+                            String::from("")
+                        }
                     )
                 }
             }

@@ -20,6 +20,8 @@ use udpx::{
 udpx::cli_binary!(ServerConfig, server_main);
 
 fn server_main(cfg: ServerConfig) -> Result<i32, i32> {
+    // return Ok(EXIT_OKAY);
+
     fn server(cfg: ServerConfig) -> Server {
         Server {
             dir: cfg.dir,
