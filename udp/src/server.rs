@@ -205,11 +205,13 @@ impl ServerRunner {
                 let stream = match stream {
                     Ok(stream) => stream,
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        log::debug!("Accept would block...");
+
                         // Poll the handle exit flag
                         if handlec.exit.load(Ordering::SeqCst) {
                             break;
                         }
-                        thread::sleep(Duration::from_millis(1));
+                        thread::sleep(Duration::from_millis(500));
                         continue;
                     }
                     Err(_) => break,
@@ -235,10 +237,12 @@ impl ServerRunner {
                         }
                     };
                     log::debug!("Server: shutting down stream ({})", stream);
+                    thread::sleep(Duration::from_millis(1000));
                     match stream.shutdown() {
                         Ok(_) => log::debug!("Shutdown successful"),
                         Err(e) => log::error!("Shutdown failed: {}", e),
                     };
+                    log::debug!("Exiting thread")
                 })
             }
 

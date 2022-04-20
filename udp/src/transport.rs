@@ -194,18 +194,29 @@ impl Listener<UdpxStream> for UdpxListener {
 
     /// Returns a new UDPX stream as well as the address of the remote peer
     fn accept(&mut self) -> io::Result<(UdpxStream, SocketAddr)> {
+        log::debug!("Listener.accept() was called");
+
         // Do a handshake
         let (n, addr) = self.sock.recv_from(&mut self.buf)?;
         let packet = Packet::try_from(&self.buf[..n])?;
 
         let timelimit_to_accept_another_syn = Duration::from_secs(2);
         if let Some(when) = self.duplicate_syns.get(&packet) {
+            return self.accept();
+
+            // return Err(io::Error::new(
+            //     io::ErrorKind::Other,
+            //     format!("duplicate SYN packet received: {}", packet),
+            // ));
+
             let how_long_has_it_been = Instant::now() - *when;
             if how_long_has_it_been < timelimit_to_accept_another_syn {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
                     format!("duplicate SYN packet received: {}", packet),
                 ));
+            } else {
+                self.duplicate_syns.remove(&packet);
             }
         }
         self.duplicate_syns.insert(packet.clone(), Instant::now());
@@ -648,7 +659,7 @@ impl Stream for UdpxStream {
         let fin = &fin_buf[..n];
 
         // 10 tries to receive a FIN-ACK
-        for _ in 0..30 {
+        for _ in 0..1000 {
             self.sock.set_write_timeout(millis(TIMEOUT))?;
             log::debug!("Sending FIN packet");
 
@@ -675,6 +686,10 @@ impl Stream for UdpxStream {
                         PacketType::FinAck | PacketType::Fin => {
                             log::debug!("FIN-ACK received");
                             break;
+                        }
+                        PacketType::Data => {
+                            log::debug!("Got a DATA packet during shutdown, I will ACK this");
+                            self.acknowledge_packet(packet.into())?;
                         }
                         _ => {
                             log::error!("Wrong packet type, got {}, expected FIN-ACK", packet);
