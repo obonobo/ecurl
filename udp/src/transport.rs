@@ -10,6 +10,7 @@ use crate::packet::{packet_buffer, Packet, PacketType};
 use crate::util::{millis, random_udp_socket_addr, TruncateLeft};
 use crate::{Bindable, Connectable, Listener, Stream, StreamIterator};
 
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{self, Error, ErrorKind, Read, Write};
@@ -80,15 +81,15 @@ impl UdpxListener {
         addr: SocketAddr,
         packet: &Packet,
     ) -> io::Result<(Packet, u32, UdpSocket)> {
-        log::debug!("Beginning handshake with {}", addr);
+        let remote = deserialize_addr(packet.data.as_ref());
+
+        log::debug!("Beginning handshake with {}", remote);
         if packet.ptyp != PacketType::Syn {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
                 "handshake failure: first packet received is not a SYN",
             ));
         }
-
-        let remote = deserialize_addr(packet.data.as_ref());
 
         // We need to create a new UdpSocket for our response - let the OS
         // choose the port
@@ -139,7 +140,7 @@ impl UdpxListener {
             PacketType::SynAck,
             &[PacketType::Ack, PacketType::Data],
             true,
-            self.nonblocking,
+            false,
             self.proxy,
         )?;
 
@@ -189,7 +190,14 @@ impl Listener<UdpxStream> for UdpxListener {
         // Do a handshake
         let (n, addr) = self.sock.recv_from(&mut self.buf)?;
         let packet = Packet::try_from(&self.buf[..n])?;
-        let (packet, nseq, sock) = self.handshake(addr, &packet)?;
+        let (packet, nseq, sock) = match self.handshake(addr, &packet) {
+            Ok(values) => values,
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                log::error!("Client unexpectedly closed connection in the middle of our handshake");
+                return Err(e);
+            }
+            Err(e) => return Err(e),
+        };
         let stream = UdpxStream::new(sock, nseq, self.proxy).with_starting_data([packet]);
         log::debug!("handshake completed with addr {}", addr);
         Ok((stream, addr))
@@ -253,6 +261,7 @@ pub struct UdpxStream {
     err: Option<io::Error>, // Socket error that has been registered during a read/write
     last_nseq: Option<u32>,
     proxy: Option<SocketAddrV4>,
+    handshake_ack: Option<Packet>,
 }
 
 impl Drop for UdpxStream {
@@ -319,6 +328,7 @@ impl UdpxStream {
             closed: false,
             last_nseq: None,
             proxy,
+            handshake_ack: None,
         }
     }
 
@@ -364,7 +374,8 @@ impl UdpxStream {
             PacketType::Syn,
             &[PacketType::SynAck],
             false,
-            false,
+            // false,
+            true,
             self.proxy,
         )?;
 
@@ -380,13 +391,15 @@ impl UdpxStream {
         // Send the ACK packet. We will just send this packet without waiting
         // for a response
         log::debug!("Sending ACK packet to complete handshake");
-        self.write_packet(&Packet {
+        let ack = Packet {
             ptyp: PacketType::Ack,
             nseq: syn_ack.nseq + 1,
             peer: self.remote.ip().to_owned(),
             port: self.remote.port(),
             ..Default::default()
-        })?;
+        };
+        self.write_packet(&ack)?;
+        self.handshake_ack = Some(ack);
         log::debug!("Handshake complete! Returning UdpxStream");
 
         // Handshake is done!
@@ -802,6 +815,15 @@ impl Write for UdpxStream {
                         continue;
                     }
 
+                    // Then the server failed to receive our handshake ACK, resend it
+                    PacketType::SynAck => {
+                        if let Some(ack) = self.handshake_ack.borrow() {
+                            let mut buf = packet_buffer();
+                            let n = ack.write_to(&mut buf[..]).unwrap();
+                            self.sock.send(&buf[..n])?;
+                        }
+                    }
+
                     // Drop packet otherwise; at this point in the conversation
                     // we should only be dealing with ACK or DATA packets
                     _ => continue,
@@ -891,7 +913,7 @@ impl MalformedPacketError for Result<Packet, io::Error> {
     }
 }
 
-const RELIABLE_SEND_MAX_ATTEMPTS: u8 = 5;
+const RELIABLE_SEND_MAX_ATTEMPTS: usize = 1 << 14;
 
 /// Sends a packet (potentially multiple times) in a loop with a timeout and
 /// waits for the response. Used for handshakes.
@@ -915,20 +937,31 @@ pub fn reliable_send(
     let joined = join(recv_packet_types);
     let mut invalid_response_packets = Vec::with_capacity(5);
 
+    let mut attempts = 1;
     let mut i = 0;
-    let mut block_limit = 50;
+
+    let mut block_limit = 15;
+    if skip_would_block {
+        block_limit = RELIABLE_SEND_MAX_ATTEMPTS
+    }
+
     while i < RELIABLE_SEND_MAX_ATTEMPTS {
         i += 1;
-        log::debug!(
-            "{}Sending {} packet, waiting for packets of type {}",
-            if i > 1 {
-                format!("(Attempt #{}) ", i)
-            } else {
-                String::new()
-            },
-            send_packet_type,
-            joined,
-        );
+        attempts += 1;
+        {
+            let packet_debug = Packet::from(send);
+            log::debug!(
+                "{}Sending {} packet to {}, waiting for packets of type {}",
+                if attempts > 1 {
+                    format!("(Attempt #{}) ", attempts)
+                } else {
+                    String::new()
+                },
+                send_packet_type,
+                format!("{}:{}", packet_debug.peer, packet_debug.port),
+                joined,
+            );
+        }
 
         // sock.send_to(send, peer)?; // Resend the packet
         sock.send_to(send, send_to_addr)?; // Resend the packet
@@ -938,7 +971,7 @@ pub fn reliable_send(
             Ok((_, addrr)) if skip_address_mismatch && addrr != peer => continue,
             Ok((n, addrr)) => Packet::try_from(&recv[..n]).map(|p| (p, addrr)),
             Err(e) if e.kind() == ErrorKind::TimedOut => continue,
-            Err(e) if skip_would_block && e.kind() == ErrorKind::WouldBlock => {
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
                 log::debug!("Would block ({}), block_limit = {}", e, block_limit);
                 if block_limit == 0 {
                     return Err(e);
@@ -954,6 +987,7 @@ pub fn reliable_send(
         // Check that the packet is of (one of) the types that we expect
         if !recv_packet_types.iter().any(|t| packet.ptyp == *t) {
             invalid_response_packets.push(packet.ptyp);
+            thread::sleep(Duration::from_millis(1));
             continue;
         }
 

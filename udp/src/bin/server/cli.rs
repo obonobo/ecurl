@@ -29,7 +29,13 @@ fn server_main(_: ServerConfig) -> Result<i32, i32> {
     .map_err(err())?;
 
     for stream in listener.incoming() {
-        let stream = stream.unwrap();
+        let stream = match stream {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("{}", e);
+                continue;
+            }
+        };
         let peer_addr = stream.peer_addr().unwrap();
         log::info!("SERVER: Made a connection with {}", peer_addr);
         // let red = stream.must_chug();
