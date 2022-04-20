@@ -13,7 +13,7 @@ use crate::{Bindable, Connectable, Listener, Stream, StreamIterator};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{self, Error, ErrorKind, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::thread;
 use std::time::Duration;
 
@@ -88,6 +88,16 @@ impl UdpxListener {
             ));
         }
 
+        let remote = deserialize_addr(packet.data.as_ref());
+
+        // We need to create a new UdpSocket for our response - let the OS
+        // choose the port
+        let sock = UdpSocket::bind("127.0.0.1:0")?;
+        log::debug!(
+            "Dispatching to new UDP socket for the rest of the conversation, new socket = {}",
+            sock.local_addr()?
+        );
+
         // The handshake needs to send a SYN-ACK packet in response and then
         // wait for the ACK to this packet. Do a timeout as well if the packet
         // SYN-ACK is not received
@@ -101,29 +111,27 @@ impl UdpxListener {
             nseq: packet.nseq + 1,
 
             // We technically only support ipv4 addresses
-            peer: if let SocketAddr::V4(addr) = addr {
+            // peer: if let SocketAddr::V4(addr) = addr {
+            //     addr.ip().to_owned()
+            // } else {
+            //     Ipv4Addr::new(127, 0, 0, 1)
+            // },
+            // port: addr.port(),
+            peer: if let SocketAddr::V4(addr) = remote {
                 addr.ip().to_owned()
             } else {
                 Ipv4Addr::new(127, 0, 0, 1)
             },
+            port: remote.port(),
 
-            port: addr.port(),
-            ..Default::default()
+            data: serialize_addr(sock.local_addr().unwrap()).into(),
         };
-
-        // We need to create a new UdpSocket for our response - let the OS
-        // choose the port
-        let sock = UdpSocket::bind("127.0.0.1:0")?;
-        log::debug!(
-            "Dispatching to new UDP socket for the rest of the conversation, new socket = {}",
-            sock.local_addr()?
-        );
 
         // Send the SYN-ACK and wait for a response packet. It should be ACK,
         // but if the ACK get's dropped, we will accept the next DATA packet as
         // well
         let n = send.write_to(&mut self.buf[..])?;
-        let (ack_or_data, remote) = reliable_send(
+        let (ack_or_data, _) = reliable_send(
             &self.buf[..n],
             &sock,
             addr,
@@ -132,6 +140,7 @@ impl UdpxListener {
             &[PacketType::Ack, PacketType::Data],
             true,
             self.nonblocking,
+            self.proxy,
         )?;
 
         // This packet should be an ACK or DATA packet
@@ -343,7 +352,7 @@ impl UdpxStream {
             nseq: 0,
             peer: *addr.ip(),
             port: addr.port(),
-            ..Default::default()
+            data: self.my_ip_buffer().into(),
         };
         let n = packet.write_to(&mut self.buf[..])?;
 
@@ -356,6 +365,7 @@ impl UdpxStream {
             &[PacketType::SynAck],
             false,
             false,
+            self.proxy,
         )?;
 
         log::debug!(
@@ -383,9 +393,18 @@ impl UdpxStream {
         Ok(self)
     }
 
+    fn my_ip_buffer(&self) -> [u8; 6] {
+        let my_addr = self.local_addr().unwrap();
+        serialize_addr(my_addr)
+    }
+
     fn write_packet(&mut self, packet: &Packet) -> io::Result<()> {
         let n = packet.write_to(&mut self.buf[..])?;
-        self.sock.send(&self.buf[..n])?;
+        // self.sock.send(&self.buf[..n])?;
+        self.sock.send_to(
+            &self.buf[..n],
+            self.proxy.map(Into::into).unwrap_or(self.remote),
+        )?;
         Ok(())
     }
 
@@ -488,6 +507,24 @@ impl UdpxStream {
         let _ = self.sock.send(&self.buf[..n]); // ignore
         Ok(())
     }
+}
+
+fn deserialize_addr(buf: &[u8]) -> SocketAddr {
+    let ip = Ipv4Addr::from(TryInto::<[u8; 4]>::try_into(&buf[..4]).unwrap());
+    let port = u16::from_le_bytes(TryInto::<[u8; 2]>::try_into(&buf[4..6]).unwrap());
+    SocketAddr::V4(SocketAddrV4::new(ip, port))
+}
+
+fn serialize_addr(my_addr: SocketAddr) -> [u8; 6] {
+    let local_addr = try_to_ipv4(my_addr).unwrap();
+    let mut body: [u8; 6] = [0; 6];
+    (&mut body[..])
+        .write_all(&local_addr.ip().octets())
+        .unwrap();
+    (&mut body[4..])
+        .write_all(local_addr.port().to_le_bytes().as_ref())
+        .unwrap();
+    body
 }
 
 impl Stream for UdpxStream {
@@ -870,11 +907,9 @@ pub fn reliable_send(
     recv_packet_types: &[PacketType],
     skip_address_mismatch: bool,
     skip_would_block: bool,
+    proxy: Option<SocketAddrV4>,
 ) -> io::Result<(Packet, SocketAddr)> {
-    // // TODO: DEBUG
-    // let timeout = Duration::from_secs(100000);
-    // // TODO: DEBUG
-
+    let send_to_addr = proxy.map(Into::into).unwrap_or(peer);
     let mut recv = packet_buffer();
     let join = |packet_types: &[PacketType]| packet_types.iter().join(" or ");
     let joined = join(recv_packet_types);
@@ -895,7 +930,9 @@ pub fn reliable_send(
             joined,
         );
 
-        sock.send_to(send, peer)?; // Resend the packet
+        // sock.send_to(send, peer)?; // Resend the packet
+        sock.send_to(send, send_to_addr)?; // Resend the packet
+
         sock.set_read_timeout(Some(timeout))?;
         let (packet, remote) = match sock.recv_from(&mut recv) {
             Ok((_, addrr)) if skip_address_mismatch && addrr != peer => continue,
@@ -920,7 +957,12 @@ pub fn reliable_send(
             continue;
         }
 
-        // let remote = packet.peer_addr();
+        if let PacketType::Syn | PacketType::SynAck = packet.ptyp {
+            // Then we need to deserialize the remote address from the message
+            let remote = deserialize_addr(packet.data.as_ref());
+            return Ok((packet, remote));
+        }
+
         return Ok((packet, remote));
     }
 
