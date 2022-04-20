@@ -1,17 +1,68 @@
 use std::{
     net::{SocketAddr, SocketAddrV4, UdpSocket},
     str::FromStr,
+    time::Instant,
 };
 
 use udpx::{
     packet::Packet,
-    transport::UdpxListener,
-    util::{config::err_to_exit_code, constants::EXIT_OKAY, logging::init_logging, Chug},
+    server::{Handle, Server},
+    transport::{UdpxListener, UdpxStream},
+    util::{
+        config::err_to_exit_code,
+        constants::{EXIT_NOT_OKAY, EXIT_OKAY},
+        logging::init_logging,
+        Chug,
+    },
     Bindable, Incoming, Stream,
 };
 
 udpx::cli_binary!(ServerConfig, server_main);
-fn server_main(_: ServerConfig) -> Result<i32, i32> {
+
+fn server_main(cfg: ServerConfig) -> Result<i32, i32> {
+    fn server(cfg: ServerConfig) -> Server {
+        Server {
+            dir: cfg.dir,
+            port: cfg.port as u32,
+            n_workers: num_cpus::get(),
+            ..Default::default()
+        }
+    }
+
+    fn set_at_exit_handler(mut handle: Handle) {
+        let now = Instant::now();
+        let set_handler = ctrlc::set_handler(move || {
+            log::info!("Server shutting down...");
+            handle.shutdown();
+            log::debug!("Server ran for {} seconds...", now.elapsed().as_secs());
+        });
+        if set_handler.is_err() {
+            log::debug!(concat!(
+                "Failed to set ctrl-c handler, ",
+                "no program exit handler has been registered..."
+            ))
+        }
+    }
+
+    let proxy = cfg.proxy;
+    let srv = server(cfg);
+
+    // match srv.serve() {
+    match srv.serve_udpx_with_proxy(proxy) {
+        Ok(handle) => {
+            log::debug!("Got a server handle: {:?}", handle);
+            set_at_exit_handler(handle.clone());
+            handle.join();
+            Ok(EXIT_OKAY)
+        }
+        Err(e) => {
+            log::error!("{}", e);
+            Err(EXIT_NOT_OKAY)
+        }
+    }
+}
+
+fn server_main2(_: ServerConfig) -> Result<i32, i32> {
     // let sock = UdpSocket::bind("localhost:8080").unwrap();
     // let sock = UdpSocket::bind("localhost:8080").unwrap();
     // let mut buf = [0; 1024];

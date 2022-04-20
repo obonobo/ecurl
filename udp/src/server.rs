@@ -21,6 +21,7 @@ use crate::{
     html::Templater,
     parse::{parse_http_request, Method, Request},
     trait_alias,
+    transport::UdpxListener,
     Bindable,
     Incoming,
     Listener,
@@ -59,6 +60,19 @@ impl Server {
     pub const DEFAULT_PORT: u32 = 8080;
     pub const DEFAULT_DIR: &'static str = "./";
     pub const DEFAULT_NUM_THREADS: usize = 4;
+
+    pub fn serve_udpx_with_proxy(
+        &self,
+        proxy: Option<SocketAddrV4>,
+    ) -> Result<Handle, ServerError> {
+        ServerRunner {
+            addr: self.addr,
+            dir: self.dir.clone(),
+            port: self.port,
+            threads: Arc::new(Mutex::new(ThreadPool::new(self.n_workers))),
+        }
+        .serve_with_proxy(proxy)
+    }
 
     /// Spins up a server with the configuration specified by the [Server]
     /// struct. This method may be called multiple times to produce multiple
@@ -175,6 +189,65 @@ struct ServerRunner {
 }
 
 impl ServerRunner {
+    fn serve_with_proxy(&mut self, proxy: Option<SocketAddrV4>) -> Result<Handle, ServerError> {
+        let addr = self.addr_str();
+        log::debug!("Attempting to bind addr {}", addr);
+
+        let mut listener = UdpxListener::bind_with_proxy(addr, proxy).map_err(wrap)?;
+        let local_addr = listener.local_addr().map_err(wrap)?;
+        log::info!("Starting server on {}", local_addr);
+        listener
+            .set_nonblocking(true)
+            .map_err(ServerError::wrap_err)?;
+
+        let mut handle = Handle::new(local_addr);
+
+        // Spin up a request handler loop in a new thread
+        let (handlec, threadsc, dirc) = (handle.clone(), self.threads.clone(), self.dir.clone());
+        handle.set_main(thread::spawn(move || {
+            for stream in listener.incoming() {
+                let stream = match stream {
+                    Ok(stream) => stream,
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // Poll the handle exit flag
+                        if handlec.exit.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(1));
+                        continue;
+                    }
+                    Err(_) => break,
+                };
+
+                log::debug!(
+                    "Connection established with {}",
+                    stream
+                        .peer_addr()
+                        .ok()
+                        .map(|addr| format!("{}", addr))
+                        .unwrap_or_else(|| String::from("..."))
+                );
+
+                let dir = dirc.clone();
+                threadsc.lock().unwrap().execute(move || {
+                    let mut stream = stream;
+                    match handle_connection(&mut stream, &dir) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::error!("Server.handle_connection(): {}", e);
+                            // write_500(&mut stream, &format!("{}", e));
+                        }
+                    };
+                })
+            }
+
+            // Join the request threads
+            threadsc.lock().unwrap().join();
+            handlec.done.wait();
+        }));
+        Ok(handle)
+    }
+
     fn serve<S, L, B>(&mut self) -> Result<Handle, ServerError>
     where
         S: ThreadsafeStream,
