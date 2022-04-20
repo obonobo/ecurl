@@ -334,7 +334,7 @@ fn handle_connection<S: ThreadsafeStream>(stream: &mut S, dir: &str) -> Result<(
     let scnr = BullshitScanner::new(stream).ignoring_eof();
 
     let mut req = parse_http_request(scnr)?;
-    log::info!("{}", req);
+    log::info!("Here is the parsed request: {}", req);
 
     let filename = req.file.as_str();
     match Requested::parse(dir, &req) {

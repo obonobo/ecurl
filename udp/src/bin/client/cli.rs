@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+use std::fs;
 use std::io::Write;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
 use std::str::FromStr;
@@ -13,17 +15,23 @@ udpx::cli_binary!(ClientConfig, client_main);
 fn client_main(cfg: ClientConfig) -> Result<i32, i32> {
     let (addr, file) = parse_args(&cfg.args)?;
     log::info!("Sending request to: {}{}", addr, file);
-    let got = get(&cfg, addr, file).map_err(|_| EXIT_NOT_OKAY)?;
-    println!("{}", got);
+
+    if cfg.get {
+        let got = get(&cfg, addr, file).map_err(|_| EXIT_NOT_OKAY)?;
+        print!("{}", got);
+    } else if cfg.post {
+        let posted = post(&cfg, addr, file).map_err(|_| EXIT_NOT_OKAY)?;
+        print!("{}", posted);
+    } else {
+        println!("Please specify either `--get` or `--post`")
+    }
+
     Ok(EXIT_OKAY)
 }
 
 fn get(cfg: &ClientConfig, addr: SocketAddrV4, file: String) -> std::io::Result<String> {
     // let remote = SocketAddrV4::from_str("127.0.0.1:8080").unwrap();
     let remote = addr;
-
-    log::debug!("remote: {}", remote);
-
     let mut conn = UdpxStream::connect_with_proxy(remote, cfg.proxy)?;
 
     conn.write_all(format!("GET {} HTTP/1.1\r\n\r\n", file).as_bytes())?;
@@ -34,8 +42,40 @@ fn get(cfg: &ClientConfig, addr: SocketAddrV4, file: String) -> std::io::Result<
     Ok(got)
 }
 
-fn post() -> std::io::Result<String> {
-    todo!()
+fn post(cfg: &ClientConfig, addr: SocketAddrV4, file: String) -> std::io::Result<String> {
+    let data = read_file(cfg)?;
+    let mut conn = UdpxStream::connect_with_proxy(addr, cfg.proxy)?;
+    conn.write_all(
+        format!(
+            "POST {} HTTP/1.1\r\nContent-Length: {}\r\n\r\n{}",
+            file,
+            data.len(),
+            data
+        )
+        .as_bytes(),
+    )?;
+
+    let posted = conn.borrow_chug()?;
+    conn.shutdown()?;
+
+    Ok(posted)
+}
+
+fn read_file(cfg: &ClientConfig) -> std::io::Result<String> {
+    if let Some(data) = cfg.inline_data.borrow() {
+        if cfg.file.is_some() {
+            eprintln!("WARNING: cannot specify both --file and --inline-data, skipping --file and using --inline-data");
+        }
+        Ok(data.to_owned())
+    } else if let Some(file) = cfg.file.borrow() {
+        fs::read_to_string(file).map_err(|e| {
+            eprintln!("Failed to read file: {}", e);
+            e
+        })
+    } else {
+        eprint!("Please specify either --file or --inline-data when using POST subcommand");
+        Err(std::io::Error::new(std::io::ErrorKind::Other, ""))
+    }
 }
 
 /// Parses remaining args
